@@ -99,6 +99,14 @@ The next probe is an emulator-only, bounded execution-breakpoint trace:
 In particular, registering a replacement EDMAC callback would change Canon's
 pipeline and is not this passive probe. No pre-encode effects hook is enabled.
 
+The separate [packed-YUV prototype](../src/experimental/yuv_anamorphic/README.md)
+provides bounded integer horizontal highlight streaks without a JPEG stage or
+RGB conversion. It accepts explicit generic packed layouts, ranges and chroma
+representations; none is asserted to match this T6 encoder. Host/ARM tests do
+not establish physical processing time. It is excluded from the current camera
+build and requires verified exclusive buffer ownership and cache handling
+before integration.
+
 A separate stock-Canon emulator run armed these observation points without
 changing firmware or target registers. The emulator's documented `V` control
 reached Canon movie Live View. During that transition Canon logged an image

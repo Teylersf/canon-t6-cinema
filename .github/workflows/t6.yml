@@ -34,6 +34,17 @@ jobs:
         run: make -C src -f Makefile.t6 asan
       - name: Freestanding ARM effect build
         run: make -C src -f Makefile.t6 arm
+      - name: Experimental packed-YUV contracts and ARM build
+        run: make -C src/experimental/yuv_anamorphic test asan arm
+      - name: Offline installer enumeration regressions
+        run: |
+          git init /tmp/t6-mlinstall
+          git -C /tmp/t6-mlinstall remote add origin https://github.com/petabyt/mlinstall.git
+          git -C /tmp/t6-mlinstall fetch --depth 1 origin 1c78f2639ac8d98b63c296592b6492f6597b84af
+          git -C /tmp/t6-mlinstall checkout --detach FETCH_HEAD
+          git -C /tmp/t6-mlinstall submodule update --init --depth 1 libs/libpict libs/libwpd
+          git -C /tmp/t6-mlinstall/libs/libwpd fetch --depth 1 origin 1b523de4df5fdda15db2ac74ef176c227d668299
+          python3 integrations/mlinstall/test_patch.py --source /tmp/t6-mlinstall --sanitize
       - name: Compile experimental 1300D.110 overlay
         run: |
           git init /tmp/t6-ml

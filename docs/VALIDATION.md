@@ -1,12 +1,19 @@
 # Validation status
 
-The film overlay has not been tested on a physical T6. The owner's camera was
-identified through read-only USB DeviceInfo as firmware 1.1.0 and supplied a
-private ROM1 dump with a matching camera-generated checksum.
+The owner reports the first physical-camera Magic Lantern splash/menu after
+normal startup with the prepared r11 card. Two resulting JPEGs were independently
+read back and decoded. Read-only USB DeviceInfo identified the camera as a Rebel
+T6 with firmware 1.1.0; its private ROM1 dump matches the camera checksum.
 
 ## Established
 
 - Full ARM946E-S camera build against the pinned 1300D.110 platform succeeds.
+- Two physical-camera outputs decode fully as RGB 2592×1728 with the expected
+  T6 Cinema software tag. The latest matches the desktop ETERNA / STRONG / BLUE
+  JPEG image codestream byte for byte, excluding metadata. Both corresponding
+  source CR2 previews decode; transfer hashes match the card readback. No source
+  hash was recorded before processing, so this is not a before/after hash proof
+  of source immutability. Personal photographs and hashes remain outside Git.
 - Shared streaming anamorphic effect tests pass strict compilation, AddressSanitizer
   and UndefinedBehaviorSanitizer with recovery disabled.
 - CR2/JPEG malformed-input regression tests pass, including real T6 preview
@@ -44,8 +51,13 @@ private ROM1 dump with a matching camera-generated checksum.
   not prove full playback, zoom, sensor or encoder behavior. LV reached the
   firmware's Live View state.
 - The Windows card utility passes 1,288 fixture checks, including a sparse-file
-  integration test and AddressSanitizer. Its physical read-only inspection was
-  denied by Windows with error 5; no card-sector write was attempted.
+  integration test and AddressSanitizer. After Windows administrator approval,
+  its physical inspection and marking completed successfully: both boot sectors
+  read back as planned, with five original sectors backed up privately. All 27
+  package/checksum files still matched their hashes afterward.
+- The isolated packed-YUV backend passes strict host, sanitizer and ARM946E-S
+  compilation checks. It has no camera hook or native build integration; its
+  explicit ownership flag does not verify producer/encoder/DMA/cache safety.
 
 The initial reference produces 2592×1728 output from a real 1300D embedded JPEG.
 No desktop timing is presented as a T6 processing-speed measurement.
@@ -54,14 +66,21 @@ mapping. It is startup/UI/API evidence, not a sensor or recording benchmark.
 
 The [source checks for commit 5e38354](https://github.com/Teylersf/canon-t6-cinema/actions/runs/41279295582)
 passed both Windows and host/ARM jobs, including the staged menu-intent test.
-The subsequent ordinary file copy to the physical card stalled with repeated
-Windows disk event 153 I/O retries and was stopped. A partial package directory
-may exist. No boot-marker operation or camera BOOT-flag change was attempted;
-reliable card/reader access is required before installation.
+The first physical-card copy stalled with Windows disk event 153 I/O retries.
+After reconnecting the reader, the complete package copied and verified. The
+reviewed helper then marked the card. Official MLinstall crashed during device
+enumeration; the [source repair](../integrations/mlinstall/README.md) skipped
+unrelated WPD entries. Its locally built GUI connected to the verified T6 and
+reported success for one `EnableBootDisk` command, followed by intentional USB
+disconnect. The owner then reported the ML splash/menu after power cycling.
+This is initial boot evidence, not an independent persistent-flag readout or
+validation of all physical controls or the video pipeline. The later JPEG
+readback establishes the narrower manual still-processing result above; no
+physical processing-duration measurement has yet been recorded.
 
 ## Not established
 
-- Boot or operation on physical hardware, Canon scheduling and cache behavior.
+- Sustained physical operation, Canon scheduling and cache behavior.
 - Camera playback indexing, responsiveness, sustained processing or battery life.
 - Reliable simultaneous shooting and background processing. Automatic mode is
   experimental and starts OFF; movie mode and capture activity abort still jobs.

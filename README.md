@@ -3,8 +3,10 @@
 Experimental Canon **EOS Rebel T6 / EOS 1300D / Kiss X80, firmware 1.1.0**
 Magic Lantern integration with Soup film looks and anamorphic-inspired effects.
 
-**Status: built, host-tested and tested in T6 emulation; NOT tested on a physical camera.** The camera
-prototype processes **still photographs**. Baked-in video effects and higher
+**Status: experimental; manual still processing verified on the owner's physical T6.**
+Two in-camera JPEGs decoded at 2592×1728; the latest ETERNA/STRONG/BLUE image
+codestream matched the same desktop render byte for byte. Sustained operation
+and recording remain unverified. The prototype processes **still photographs**. Baked-in video effects and higher
 frame-rate recording are research goals, **not implemented features**. This is
 not a complete Magic Lantern installer or a production-ready firmware release.
 
@@ -54,6 +56,9 @@ establish a faster sensor mode. No 120/240 fps T6 mode has been validated here.
 The T6's upstream movie structures and several buffer addresses are explicitly
 unverified. An LCD preview filter is not proof of an effect in the saved MOV.
 See [video research](docs/VIDEO_RESEARCH.md) and [high-fps research](docs/HIGH_FPS.md).
+An isolated [packed-YUV processing prototype](src/experimental/yuv_anamorphic/README.md)
+uses integer highlight streaks and row scratch. It is not linked into the camera
+build and does not establish the T6 encoder's format, buffer ownership or FPS.
 
 The [read-only Windows camera-info tool](tools/read-only-camera-info/README.md)
 confirmed the connected T6's firmware as **1.1.0** using standard PTP DeviceInfo.

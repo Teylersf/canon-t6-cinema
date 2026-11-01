@@ -1,0 +1,73 @@
+--- a/libs/libpict/src/libwpd.c
++++ b/libs/libpict/src/libwpd.c
+@@ -79,35 +79,39 @@
+ 
+ 	int num_devices = 0;
+ 	wchar_t **list = wpd_get_devices(wpd, &num_devices);
+-	if (num_devices == 0) {
++	if (list == NULL || num_devices <= 0) {
++		if (list != NULL) wpd_free_devices(wpd, list, 0);
+ 		ptp_mutex_unlock(r);
+ 		return NULL;
+ 	}
+ 
+-	struct PtpDeviceEntry *curr_ent = calloc(1, sizeof(struct PtpDeviceEntry));
++	struct PtpDeviceEntry *new_list = NULL;
++	struct PtpDeviceEntry *tail = NULL;
++	for (int i = 0; i < num_devices; i++) {
++		struct LibWPDDescriptor d;
++		/* WPD also lists non-USB portable devices and removable drives.
++		 * An unsupported path is not a fatal camera/protocol error. */
++		if (list[i] == NULL || wpd_parse_io_path(list[i], &d)) continue;
+ 
+-	struct PtpDeviceEntry *new_list = curr_ent;
+-
+-	for (int i = 0; i < num_devices; i++) {
+-		if (i != 0) {
+-			struct PtpDeviceEntry *next_ent = calloc(1, sizeof(struct PtpDeviceEntry));
+-			next_ent->prev = curr_ent;
+-			next_ent->next = NULL;
+-			curr_ent->next = next_ent;
+-			curr_ent = next_ent;
+-		} else {
+-			curr_ent->prev = NULL;
++		struct PtpDeviceEntry *entry = calloc(1, sizeof(struct PtpDeviceEntry));
++		if (entry == NULL) {
++			ptpusb_free_device_list(new_list);
++			wpd_free_devices(wpd, list, num_devices);
++			ptp_mutex_unlock(r);
++			return NULL;
+ 		}
+-
+-		struct LibWPDDescriptor d;
+-		int rc = wpd_parse_io_path(list[i], &d);
+-		if (rc) ptp_panic("wpd_parse_io_path");
+-
+-		curr_ent->product_id = d.product_id;
+-		curr_ent->vendor_id = d.vendor_id;
+-		curr_ent->device_handle_ptr = list[i];
++		entry->prev = tail;
++		if (tail != NULL) tail->next = entry;
++		else new_list = entry;
++		tail = entry;
++		entry->product_id = d.product_id;
++		entry->vendor_id = d.vendor_id;
++		entry->device_handle_ptr = list[i];
+ 	}
+ 
++	/* Successful entries keep the upstream borrowed WPD-path lifetime.
++	 * If none matched, no returned entry can refer to this allocation. */
++	if (new_list == NULL) wpd_free_devices(wpd, list, num_devices);
+ 	ptp_mutex_unlock(r);
+ 	return new_list;
+ }
+--- a/src/main.c
++++ b/src/main.c
+@@ -144,6 +144,7 @@
+ 	}
+ 
+ 	rc = ptp_device_open(ptp_runtime, selected);
++	if (rc) return rc;
+ 
+ 	attempts = 0;
+ 
