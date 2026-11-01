@@ -38,6 +38,11 @@ private ROM1 dump with a matching camera-generated checksum.
   half-shutter pulses and remains closed after an additional 1.2 seconds each.
   The checked T6 menu-intent patch prevents duplicate close wakes reopening it;
   its actual staged helper/consumer also pass sanitizer scheduling regressions.
+- The final emulator button checks also cover all stock dial selections/wrap,
+  MENU/AV close and reopen, DISP guide, Q pages, and Playback/zoom/LV console
+  exits. These handoffs establish console exit and event forwarding; they do
+  not prove full playback, zoom, sensor or encoder behavior. LV reached the
+  firmware's Live View state.
 - The Windows card utility passes 1,288 fixture checks, including a sparse-file
   integration test and AddressSanitizer. Its physical read-only inspection was
   denied by Windows with error 5; no card-sector write was attempted.
@@ -46,6 +51,13 @@ The initial reference produces 2592×1728 output from a real 1300D embedded JPEG
 No desktop timing is presented as a T6 processing-speed measurement.
 Emulation uses a derived ROM1 reset sector and an explicitly unvalidated ROM0
 mapping. It is startup/UI/API evidence, not a sensor or recording benchmark.
+
+The [source checks for commit 5e38354](https://github.com/Teylersf/canon-t6-cinema/actions/runs/41279295582)
+passed both Windows and host/ARM jobs, including the staged menu-intent test.
+The subsequent ordinary file copy to the physical card stalled with repeated
+Windows disk event 153 I/O retries and was stopped. A partial package directory
+may exist. No boot-marker operation or camera BOOT-flag change was attempted;
+reliable card/reader access is required before installation.
 
 ## Not established
 
