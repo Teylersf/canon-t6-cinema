@@ -22,9 +22,11 @@ authenticated publisher checksum. Its encrypted payload was not successfully
 decoded; exact source/binary equivalence and HMAC authentication remain
 unverified.
 
-The unchanged official dumper was staged on the user's FAT32 spare card and
-read back with the same SHA-256. No formatting, deletion, card bootblock change,
-camera bootflag change or firmware execution was performed.
+The spare card initially had a dirty filesystem. After the user confirmed its
+old files were disposable, it was formatted as FAT32 and reported Healthy / OK,
+with the dirty flag clear. The unchanged official dumper was then staged and
+read back with the same SHA-256. No bootable-card flags, camera bootflags or
+camera firmware execution were performed.
 
 Keep resulting ROM files and RESCUE.LOG private and outside Git. Check generated
 MD5 files against the actual dumps before emulator work; historical reports
