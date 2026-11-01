@@ -19,7 +19,18 @@ recorded video and JPEG sequences using CUDA and NVENC. Baked-in camera video
 effects and higher frame-rate recording remain research goals. This is
 not a complete Magic Lantern installer or a production-ready firmware release.
 
-## What works in the prototype
+## Local Anamorphic Studio app
+
+Double-click **[START ANAMORPHIC STUDIO.cmd](START%20ANAMORPHIC%20STUDIO.cmd)**
+and open **http://127.0.0.1:8766**. The local React/CUDA app imports footage,
+previews adjustable lens/film effects, compares before/after and exports at
+source dimensions up to tested UHD 8K. **Match source** is the default export;
+compatible audio is copied, and codec-lossless encoding is used where supported.
+The separate RGB16 lossless master verifies every processed sample.
+[Setup, features, tests and format limits](tools/anamorphic-studio/README.md).
+Deployment is on hold; footage stays on the computer.
+
+## What works in the camera prototype
 
 - Native **T6 Film** menu alongside the existing Magic Lantern menus.
 - An amber retro dashboard operated with the D-pad, main dial, SET, Q and DISP.
