@@ -46,6 +46,11 @@ The T6's upstream movie structures and several buffer addresses are explicitly
 unverified. An LCD preview filter is not proof of an effect in the saved MOV.
 See [video research](docs/VIDEO_RESEARCH.md) and [high-fps research](docs/HIGH_FPS.md).
 
+The [read-only Windows camera-info tool](tools/read-only-camera-info/README.md)
+confirmed the connected T6's firmware as **1.1.0** using standard PTP DeviceInfo.
+See the [sanitized hardware baseline](docs/HARDWARE_BASELINE.md). This USB check
+did not boot the overlay or validate video effects or higher frame rates.
+
 ## Build and try the renderer on a computer
 
 Linux or WSL Ubuntu 24.04:
