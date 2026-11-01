@@ -13,7 +13,6 @@
 #endif
 
 #define HEVC_T6_CREATE_NEW 0x8501u /* native write/create/exclusive/check-existing; NO truncate */
-#define HEVC_VERIFY_BYTES 4096u
 #define HEVC_SLOTS 16
 
 static struct film_hevc_results hevc_results;
@@ -54,7 +53,10 @@ static const uint32_t hevc_crc_table[256] = {
 
 typedef struct {
     FILE *output;
-    uint32_t started, written, crc, source_ctus;
+    uint8_t *dma;
+    uint32_t started, budget, written, accepted, copied, crc, source_ctus, pending;
+    enum film_hevc_phase phase;
+    uint32_t phase_started;
 } hevc_job;
 
 const struct film_hevc_results *film_hevc_get_results(void) { return &hevc_results; }
@@ -83,7 +85,7 @@ static int hevc_interrupted(hevc_job *job)
         hevc_results.state = FILM_HEVC_BUSY;
         return 1;
     }
-    if ((uint32_t)((uint32_t)get_ms_clock() - job->started) >= FILM_HEVC_DEADLINE_MS) {
+    if ((uint32_t)((uint32_t)get_ms_clock() - job->started) >= job->budget) {
         hevc_results.state = FILM_HEVC_DEADLINE;
         return 1;
     }
@@ -91,6 +93,24 @@ static int hevc_interrupted(hevc_job *job)
 }
 
 static int hevc_cancelled(void *context) { return hevc_interrupted(context); }
+
+static void hevc_phase_begin(hevc_job *job, enum film_hevc_phase phase)
+{
+    job->phase = phase;
+    job->phase_started = (uint32_t)get_ms_clock();
+    hevc_results.phase_started_mask |= 1u << ((unsigned)phase - 1u);
+}
+
+static void hevc_phase_end(hevc_job *job, int complete)
+{
+    unsigned index;
+    if (job->phase == FILM_HEVC_PHASE_NONE) return;
+    index = (unsigned)job->phase - 1u;
+    hevc_results.phase_ms[index] += (uint32_t)((uint32_t)get_ms_clock() - job->phase_started);
+    if (complete) hevc_results.phase_completed_mask |= 1u << index;
+    else hevc_results.stopped_phase = (uint32_t)job->phase;
+    job->phase = FILM_HEVC_PHASE_NONE;
+}
 
 static int hevc_read_ctu(void *context, uint32_t frame, uint32_t x, uint32_t y,
                          uint8_t block[HI_CTU_BYTES])
@@ -119,22 +139,48 @@ static int hevc_read_ctu(void *context, uint32_t frame, uint32_t x, uint32_t y,
     return 1;
 }
 
+static int hevc_flush(hevc_job *job)
+{
+    int wrote;
+    uint32_t pending = job->pending;
+    if (!pending) return 1;
+    if (hevc_interrupted(job)) return 0;
+    ++hevc_results.fio_write_calls;
+    wrote = FIO_WriteFile(job->output, job->dma, pending);
+    if (wrote > 0 && (uint32_t)wrote <= pending) {
+        job->written += (uint32_t)wrote;
+        job->crc = hevc_crc(job->crc, job->dma, (size_t)wrote);
+    }
+    if (wrote < 0 || (uint32_t)wrote != pending) {
+        hevc_results.state = FILM_HEVC_IO_ERROR;
+        return 0; /* Never retry or flush a failed stream during cleanup. */
+    }
+    job->pending = 0;
+    if (hevc_interrupted(job)) return 0;
+    return 1;
+}
+
 static int hevc_write(void *context, const uint8_t *data, size_t bytes)
 {
     hevc_job *job = context;
-    int wrote;
+    size_t remaining = bytes;
+    ++hevc_results.write_callback_calls;
     if (hevc_interrupted(job)) return 0;
-    if (bytes > FILM_HEVC_OUTPUT_LIMIT - job->written) {
+    if (bytes > HI_OUTPUT_BYTES || bytes > FILM_HEVC_OUTPUT_LIMIT - job->copied) {
         hevc_results.state = FILM_HEVC_CODEC_ERROR;
         return 0;
     }
-    wrote = FIO_WriteFile(job->output, data, bytes);
-    if (wrote > 0 && (size_t)wrote <= bytes) job->written += (uint32_t)wrote;
-    if (wrote < 0 || (size_t)wrote != bytes) {
-        hevc_results.state = FILM_HEVC_IO_ERROR;
-        return 0;
+    while (remaining) {
+        size_t amount = FILM_HEVC_DMA_BYTES - job->pending;
+        if (amount > remaining) amount = remaining;
+        memcpy(job->dma + job->pending, data, amount);
+        job->pending += (uint32_t)amount;
+        job->copied += (uint32_t)amount;
+        data += amount;
+        remaining -= amount;
+        if (job->pending == FILM_HEVC_DMA_BYTES && !hevc_flush(job)) return 0;
     }
-    job->crc = hevc_crc(job->crc, data, bytes);
+    job->accepted += (uint32_t)bytes;
     return 1;
 }
 
@@ -153,9 +199,11 @@ static int hevc_verify(hevc_job *job, const char *path, uint8_t *buffer)
         uint32_t amount = job->written - done;
         int got;
         if (hevc_interrupted(job)) goto done;
-        if (amount > HEVC_VERIFY_BYTES) amount = HEVC_VERIFY_BYTES;
+        if (amount > FILM_HEVC_DMA_BYTES) amount = FILM_HEVC_DMA_BYTES;
+        ++hevc_results.fio_read_calls;
         got = FIO_ReadFile(input, buffer, amount);
         if (got <= 0 || (uint32_t)got > amount) goto done;
+        hevc_results.fio_read_bytes += (uint32_t)got;
         crc = hevc_crc(crc, buffer, (size_t)got);
         done += (uint32_t)got;
     }
@@ -166,35 +214,258 @@ done:
     return ok;
 }
 
+typedef struct {
+    uint32_t started;
+    int io_started;
+} hevc_report_job;
+
+typedef struct { size_t used; int failed; } hevc_csv;
+static char hevc_report_body[FILM_HEVC_REPORT_MAX_BYTES];
+
+/* This guard deliberately does NOT call hevc_interrupted: the proof's budget
+ * may already have expired, and its frozen outcome must never be overwritten. */
+static int hevc_report_interrupted(hevc_report_job *report)
+{
+    if (film_t6_cancelled() || ml_shutdown_requested || lens_info.job_state ||
+        get_halfshutter_pressed() || lv || is_movie_mode() || RECORDING) {
+        hevc_results.report_state = report->io_started ? FILM_HEVC_REPORT_INTERRUPTED :
+                                                        FILM_HEVC_REPORT_SKIPPED_GUARD;
+        return 1;
+    }
+    if ((uint32_t)((uint32_t)get_ms_clock() - report->started) >= FILM_HEVC_REPORT_DEADLINE_MS) {
+        hevc_results.report_state = FILM_HEVC_REPORT_DEADLINE;
+        return 1;
+    }
+    return 0;
+}
+
+static void hevc_csv_text(hevc_csv *csv, const char *text)
+{
+    while (*text && !csv->failed) {
+        if (csv->used >= sizeof(hevc_report_body) - 1u) { csv->failed = 1; break; }
+        hevc_report_body[csv->used++] = *text++;
+    }
+    hevc_report_body[csv->used] = 0;
+}
+
+static void hevc_csv_number(hevc_csv *csv, uint32_t value)
+{
+    char reverse[10], digit[2];
+    unsigned count = 0;
+    do { reverse[count++] = (char)('0' + value % 10u); value /= 10u; } while (value);
+    digit[1] = 0;
+    while (count) { digit[0] = reverse[--count]; hevc_csv_text(csv, digit); }
+}
+
+static void hevc_csv_value(hevc_csv *csv, const char *key, uint32_t value)
+{
+    hevc_csv_text(csv, key); hevc_csv_text(csv, ",");
+    hevc_csv_number(csv, value); hevc_csv_text(csv, "\n");
+}
+
+static size_t hevc_make_report(const struct film_hevc_results *proof, const char *attempt_path)
+{
+    static const char *const phase_names[FILM_HEVC_PHASE_COUNT] = {
+        "setup_ms", "encode_ms", "tmp_verify_ms", "rename_ms", "final_verify_ms"
+    };
+    static const char *const state_names[] = {
+        "idle", "running", "saved", "cancelled", "busy", "deadline", "no_memory",
+        "bad_size", "io_error", "verify_error", "codec_error", "memory_class_error"
+    };
+    hevc_csv csv = {0, 0};
+    unsigned i;
+    hevc_report_body[0] = 0;
+    hevc_csv_text(&csv, "type,synthetic_hevc_proof\nversion,2\noptimization,");
+    hevc_csv_text(&csv, FILM_HEVC_OPTIMIZATION_LABEL);
+    hevc_csv_text(&csv, "\nphase_timing,encode_includes_synthesis_FIO_CRC_yields\n");
+    hevc_csv_value(&csv, "requested_size", proof->size_choice);
+    hevc_csv_value(&csv, "width", proof->width);
+    hevc_csv_value(&csv, "height", proof->height);
+    hevc_csv_value(&csv, "frames_requested", proof->frames_requested);
+    hevc_csv_value(&csv, "frames_encoded", proof->frames_encoded);
+    hevc_csv_value(&csv, "ctus_encoded", proof->ctus_encoded);
+    hevc_csv_value(&csv, "proof_state", (uint32_t)proof->state);
+    hevc_csv_text(&csv, "proof_state_name,");
+    hevc_csv_text(&csv, (unsigned)proof->state < sizeof(state_names)/sizeof(state_names[0]) ?
+                        state_names[(unsigned)proof->state] : "invalid");
+    hevc_csv_text(&csv, "\n");
+    hevc_csv_value(&csv, "codec_called", proof->codec_called);
+    hevc_csv_value(&csv, "codec_result", proof->codec_result);
+    hevc_csv_value(&csv, "codec_bytes_committed", proof->codec_bytes_committed);
+    hevc_csv_value(&csv, "accepted_bytes", proof->accepted_bytes);
+    hevc_csv_value(&csv, "written_bytes", proof->written_bytes);
+    hevc_csv_value(&csv, "crc32", proof->crc32);
+    hevc_csv_value(&csv, "proof_elapsed_ms", proof->elapsed_ms);
+    hevc_csv_value(&csv, "budget_ms", proof->budget_ms);
+    hevc_csv_value(&csv, "output_limit_bytes", FILM_HEVC_OUTPUT_LIMIT);
+    hevc_csv_value(&csv, "buffer_bytes", proof->buffer_bytes);
+    hevc_csv_value(&csv, "workspace_bytes", (uint32_t)sizeof(hi_workspace));
+    hevc_csv_value(&csv, "write_callback_calls", proof->write_callback_calls);
+    hevc_csv_value(&csv, "fio_write_calls", proof->fio_write_calls);
+    hevc_csv_value(&csv, "fio_read_calls", proof->fio_read_calls);
+    hevc_csv_value(&csv, "fio_read_bytes", proof->fio_read_bytes);
+    hevc_csv_value(&csv, "phase_started_mask", proof->phase_started_mask);
+    hevc_csv_value(&csv, "phase_completed_mask", proof->phase_completed_mask);
+    hevc_csv_value(&csv, "stopped_phase", proof->stopped_phase);
+    for (i = 0; i < FILM_HEVC_PHASE_COUNT; ++i) hevc_csv_value(&csv, phase_names[i], proof->phase_ms[i]);
+    hevc_csv_value(&csv, "hvc_published", proof->path[0] != 0);
+    hevc_csv_value(&csv, "hvc_verified", proof->state == FILM_HEVC_SAVED);
+    hevc_csv_text(&csv, "hvc_path,"); hevc_csv_text(&csv, proof->path);
+    hevc_csv_text(&csv, "\nattempted_hvc_path,"); hevc_csv_text(&csv, attempt_path);
+    hevc_csv_text(&csv, "\n");
+    hevc_csv_value(&csv, "report_budget_ms", FILM_HEVC_REPORT_DEADLINE_MS);
+    hevc_csv_text(&csv, "camera_capture,0\nrecording_fps_measured,0\n");
+    return csv.failed ? 0u : csv.used;
+}
+
+static int hevc_report_verify(hevc_report_job *report, const char *path,
+                               size_t length, uint8_t *buffer)
+{
+    FILE *input = NULL;
+    uint32_t size;
+    size_t done = 0;
+    int ok = 0;
+    if (hevc_report_interrupted(report) || FIO_GetFileSize(path, &size) || size != length ||
+        hevc_report_interrupted(report)) return 0;
+    input = FIO_OpenFile(path, O_RDONLY);
+    if (!input) return 0;
+    while (done < length) {
+        size_t amount = length - done;
+        int got;
+        if (hevc_report_interrupted(report)) goto done;
+        if (amount > FILM_HEVC_REPORT_VERIFY_BYTES) amount = FILM_HEVC_REPORT_VERIFY_BYTES;
+        got = FIO_ReadFile(input, buffer, amount);
+        if (got <= 0 || (size_t)got > amount ||
+            memcmp(buffer, hevc_report_body + done, (size_t)got)) goto done;
+        done += (size_t)got;
+    }
+    if (hevc_report_interrupted(report)) goto done;
+    ok = !FIO_GetFileSize(path, &size) && size == length;
+    if (hevc_report_interrupted(report)) ok = 0;
+done:
+    FIO_CloseFile(input);
+    return ok;
+}
+
+/* Called only after all proof allocations/handles are released. The CSV holds
+ * an immutable proof snapshot; report failures touch only report_* fields. */
+static void hevc_save_report(const struct film_hevc_results *proof, const char *attempt_path)
+{
+    hevc_report_job report;
+    uint8_t *buffer = NULL;
+    FILE *output = NULL;
+    char temporary[32] = "", destination[32] = "";
+    size_t length;
+    int slot, created = 0, exists, wrote;
+    report.started = (uint32_t)get_ms_clock(); report.io_started = 0;
+    hevc_results.report_state = FILM_HEVC_REPORT_RUNNING;
+    if (proof->state == FILM_HEVC_CANCELLED || proof->state == FILM_HEVC_BUSY) {
+        hevc_results.report_state = FILM_HEVC_REPORT_SKIPPED_GUARD;
+        goto done;
+    }
+    if (hevc_report_interrupted(&report)) goto done;
+    length = hevc_make_report(proof, attempt_path);
+    if (!length) goto io_error;
+    buffer = fio_malloc(FILM_HEVC_REPORT_VERIFY_BYTES);
+    if (!buffer) { hevc_results.report_state = FILM_HEVC_REPORT_NO_MEMORY; goto done; }
+    /* Classification arithmetic only; never dereference a transformed alias. */
+    if (CACHEABLE(buffer) == buffer) {
+        hevc_results.report_state = FILM_HEVC_REPORT_MEMORY_CLASS_ERROR; goto done;
+    }
+    for (slot = 1; slot <= HEVC_SLOTS; ++slot) {
+        if (hevc_report_interrupted(&report)) goto done;
+        snprintf(destination, sizeof(destination), "ML/FILM/HVCR%04d.CSV", slot);
+        snprintf(temporary, sizeof(temporary), "ML/FILM/HVCR%04d.TMP", slot);
+        if (strlen(destination) != 20u || strlen(temporary) != 20u) goto io_error;
+        report.io_started = 1;
+        exists = is_file(destination);
+        if (hevc_report_interrupted(&report)) goto done;
+        exists = is_file(temporary) || exists;
+        if (!exists) break;
+    }
+    if (slot > HEVC_SLOTS) { hevc_results.report_state = FILM_HEVC_REPORT_SLOTS_FULL; goto done; }
+    if (hevc_report_interrupted(&report)) goto done;
+    exists = is_file(destination);
+    if (hevc_report_interrupted(&report)) goto done;
+    if (is_file(temporary) || exists) goto io_error;
+    if (hevc_report_interrupted(&report)) goto done;
+    output = FIO_OpenFile(temporary, HEVC_T6_CREATE_NEW);
+    if (!output) goto io_error;
+    created = 1;
+    if (hevc_report_interrupted(&report)) goto done;
+    wrote = FIO_WriteFile(output, hevc_report_body, length);
+    if (wrote > 0 && (size_t)wrote <= length) hevc_results.report_bytes = (uint32_t)wrote;
+    if (wrote < 0 || (size_t)wrote != length) goto io_error;
+    FIO_CloseFile(output); output = NULL;
+    if (hevc_report_interrupted(&report)) goto done;
+    if (!hevc_report_verify(&report, temporary, length, buffer)) goto verify_error;
+    if (hevc_report_interrupted(&report)) goto done;
+    exists = is_file(destination);
+    if (hevc_report_interrupted(&report)) goto done;
+    if (exists || FIO_RenameFile(temporary, destination)) goto io_error;
+    created = 0;
+    memcpy(hevc_results.report_path, destination, strlen(destination) + 1u);
+    if (!hevc_report_verify(&report, destination, length, buffer)) goto verify_error;
+    if (hevc_report_interrupted(&report)) goto done;
+    hevc_results.report_state = FILM_HEVC_REPORT_SAVED;
+    goto done;
+verify_error:
+    if (hevc_results.report_state == FILM_HEVC_REPORT_RUNNING)
+        hevc_results.report_state = FILM_HEVC_REPORT_VERIFY_ERROR;
+    goto done;
+io_error:
+    hevc_results.report_state = FILM_HEVC_REPORT_IO_ERROR;
+done:
+    if (output) FIO_CloseFile(output);
+    if (created) FIO_RemoveFile(temporary);
+    if (buffer) fio_free(buffer);
+    hevc_results.report_elapsed_ms = (uint32_t)((uint32_t)get_ms_clock() - report.started);
+}
+
 int film_hevc_generate(unsigned size_choice)
 {
     static const uint32_t widths[3] = {320u, 3840u, 7680u};
     static const uint32_t heights[3] = {180u, 2160u, 4320u};
+    static const uint32_t budgets[3] = {FILM_HEVC_DEADLINE_MS,
+        FILM_HEVC_4K_DEADLINE_MS, FILM_HEVC_8K_DEADLINE_MS};
+    struct film_hevc_results proof;
     hevc_job job;
     hi_config config;
     hi_io io;
     hi_stats stats;
     hi_workspace *workspace = NULL;
-    uint8_t *verify_buffer = NULL;
     char temporary[32] = "", destination[32] = "", status[48];
-    int slot, created = 0, result = -1;
+    int slot = 0, created = 0, result = -1;
     hi_result encoded = HI_BAD_ARGUMENT;
     memset(&job, 0, sizeof(job));
     memset(&stats, 0, sizeof(stats));
     memset(&hevc_results, 0, sizeof(hevc_results));
     job.started = (uint32_t)get_ms_clock();
+    job.budget = FILM_HEVC_DEADLINE_MS;
     job.crc = 0xffffffffu;
-    hevc_results.version = 1;
+    hevc_results.version = 2;
     hevc_results.state = FILM_HEVC_RUNNING;
     hevc_results.codec_result = FILM_HEVC_CODEC_NOT_CALLED;
     hevc_results.frames_requested = FILM_HEVC_FRAMES;
+    hevc_results.size_choice = size_choice;
+    hevc_results.buffer_bytes = FILM_HEVC_DMA_BYTES;
+    hevc_results.optimization_profile = FILM_HEVC_OPTIMIZATION_PROFILE;
+    hevc_phase_begin(&job, FILM_HEVC_PHASE_SETUP);
     if (size_choice >= 3u) { hevc_results.state = FILM_HEVC_BAD_SIZE; goto done; }
     hevc_results.width = widths[size_choice];
     hevc_results.height = heights[size_choice];
+    job.budget = budgets[size_choice];
+    hevc_results.budget_ms = job.budget;
     if (hevc_interrupted(&job)) goto done;
     workspace = malloc(sizeof(*workspace));
     if (!workspace) { hevc_results.state = FILM_HEVC_NO_MEMORY; goto done; }
     if (hevc_interrupted(&job)) goto done;
+    job.dma = fio_malloc(FILM_HEVC_DMA_BYTES);
+    if (!job.dma) { hevc_results.state = FILM_HEVC_NO_MEMORY; goto done; }
+    if (hevc_interrupted(&job)) goto done;
+    if (CACHEABLE(job.dma) == job.dma) {
+        hevc_results.state = FILM_HEVC_MEMORY_CLASS_ERROR; goto done;
+    }
     for (slot = 1; slot <= HEVC_SLOTS; ++slot) {
         if (hevc_interrupted(&job)) goto done;
         snprintf(destination, sizeof(destination), "ML/FILM/HVCT%04d.HVC", slot);
@@ -205,9 +476,11 @@ int film_hevc_generate(unsigned size_choice)
     if (slot > HEVC_SLOTS) goto io_error;
     if (hevc_interrupted(&job)) goto done;
     if (is_file(destination) || is_file(temporary)) goto io_error;
+    if (hevc_interrupted(&job)) goto done;
     job.output = FIO_OpenFile(temporary, HEVC_T6_CREATE_NEW);
     if (!job.output) goto io_error;
     created = 1;
+    hevc_phase_end(&job, 1);
     config.width = hevc_results.width;
     config.height = hevc_results.height;
     config.frames = FILM_HEVC_FRAMES;
@@ -217,32 +490,45 @@ int film_hevc_generate(unsigned size_choice)
     io.read_ctu = hevc_read_ctu;
     io.cancelled = hevc_cancelled;
     film_t6_set_status("HEVC proof: SYNTHETIC ONLY");
+    hevc_phase_begin(&job, FILM_HEVC_PHASE_ENCODE);
+    hevc_results.codec_called = 1;
     encoded = hi_encode(&config, &io, workspace, &stats);
     hevc_results.codec_result = (uint32_t)encoded;
-    /* No full frame, and no cached codec workspace during readback. */
-    free(workspace);
-    workspace = NULL;
-    FIO_CloseFile(job.output);
-    job.output = NULL;
-    if (hevc_interrupted(&job)) goto done;
     if (encoded != HI_OK || stats.frames_encoded != FILM_HEVC_FRAMES ||
-        stats.bytes_committed != job.written || !job.written) {
+        stats.bytes_committed != job.accepted || !job.accepted) {
         if (hevc_results.state == FILM_HEVC_RUNNING) hevc_results.state = FILM_HEVC_CODEC_ERROR;
         goto done;
     }
-    verify_buffer = fio_malloc(HEVC_VERIFY_BYTES);
-    if (!verify_buffer) { hevc_results.state = FILM_HEVC_NO_MEMORY; goto done; }
-    if (!hevc_verify(&job, temporary, verify_buffer)) goto verify_error;
+    /* Only a successful codec may flush its pending tail. Cleanup NEVER
+     * flushes failed/canceled buffers, even when two frames were accepted. */
+    if (!hevc_flush(&job)) goto done;
+    FIO_CloseFile(job.output); job.output = NULL;
+    free(workspace); workspace = NULL;
     if (hevc_interrupted(&job)) goto done;
-    if (is_file(destination) || FIO_RenameFile(temporary, destination)) goto io_error;
+    if (job.written != job.accepted || job.pending) {
+        hevc_results.state = FILM_HEVC_CODEC_ERROR; goto done;
+    }
+    hevc_phase_end(&job, 1);
+    hevc_phase_begin(&job, FILM_HEVC_PHASE_TMP_VERIFY);
+    if (!hevc_verify(&job, temporary, job.dma)) goto verify_error;
+    if (hevc_interrupted(&job)) goto done;
+    hevc_phase_end(&job, 1);
+    hevc_phase_begin(&job, FILM_HEVC_PHASE_RENAME);
+    if (hevc_interrupted(&job)) goto done;
+    {
+        int exists = is_file(destination);
+        if (hevc_interrupted(&job)) goto done;
+        if (exists || FIO_RenameFile(temporary, destination)) goto io_error;
+    }
     created = 0; /* Publication boundary: NEVER delete the destination. */
     memcpy(hevc_results.path, destination, strlen(destination) + 1u);
-    if (!hevc_verify(&job, destination, verify_buffer)) goto verify_error;
+    hevc_phase_end(&job, 1);
+    hevc_phase_begin(&job, FILM_HEVC_PHASE_FINAL_VERIFY);
+    if (!hevc_verify(&job, destination, job.dma)) goto verify_error;
     if (hevc_interrupted(&job)) goto done;
+    hevc_phase_end(&job, 1);
     hevc_results.state = FILM_HEVC_SAVED;
     result = 0;
-    snprintf(status, sizeof(status), "HEVC synthetic: HVCT%04d.HVC", slot);
-    film_t6_set_status(status);
     goto done;
 verify_error:
     if (hevc_results.state == FILM_HEVC_RUNNING) hevc_results.state = FILM_HEVC_VERIFY_ERROR;
@@ -250,21 +536,37 @@ verify_error:
 io_error:
     hevc_results.state = FILM_HEVC_IO_ERROR;
 done:
+    hevc_phase_end(&job, 0);
     if (job.output) FIO_CloseFile(job.output);
     if (workspace) free(workspace);
-    if (verify_buffer) fio_free(verify_buffer);
+    if (job.dma) fio_free(job.dma);
     if (created) FIO_RemoveFile(temporary);
     hevc_results.bytes = job.written;
     hevc_results.crc32 = job.crc ^ 0xffffffffu;
+    hevc_results.accepted_bytes = job.accepted;
+    hevc_results.written_bytes = job.written;
+    hevc_results.codec_bytes_committed = stats.bytes_committed <= UINT32_MAX ?
+        (uint32_t)stats.bytes_committed : UINT32_MAX;
     hevc_results.frames_encoded = stats.frames_encoded;
     hevc_results.ctus_encoded = stats.ctus_encoded;
     hevc_results.elapsed_ms = (uint32_t)((uint32_t)get_ms_clock() - job.started);
+    /* Freeze all primary fields before diagnostics. Export has a fresh budget
+     * and can neither turn an HVC failure into success nor change its reason. */
+    proof = hevc_results;
+    hevc_save_report(&proof, destination);
     if (hevc_results.state == FILM_HEVC_CANCELLED) {
         film_t6_set_status("HEVC proof canceled"); result = 1;
     } else if (hevc_results.state == FILM_HEVC_BUSY) {
         film_t6_set_status("HEVC proof stopped for camera"); result = 1;
     } else if (hevc_results.state == FILM_HEVC_DEADLINE) {
-        film_t6_set_status("HEVC proof: cooperative 30s limit"); result = 1;
+        if (hevc_results.report_state == FILM_HEVC_REPORT_SAVED) {
+            snprintf(status, sizeof(status), "HEVC limit; %s", hevc_results.report_path + 8);
+            film_t6_set_status(status);
+        } else film_t6_set_status("HEVC proof reached time limit");
+        result = 1;
+    } else if (!result) {
+        snprintf(status, sizeof(status), "HEVC synthetic: HVCT%04d.HVC", slot);
+        film_t6_set_status(status);
     } else if (result) {
         film_t6_set_status(hevc_results.path[0] ? "HEVC proof kept; verify failed" :
                            "HEVC proof not saved/verified");

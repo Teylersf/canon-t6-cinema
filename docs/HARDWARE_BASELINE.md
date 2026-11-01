@@ -64,6 +64,24 @@ requested call did not run. These are synthetic kernel timings with no encoder,
 sensor or recording-FPS measurement. A cached pointer is not a demonstrated
 ownership/cache-handoff policy for Canon's DMA buffers.
 
+### Physical r14 HEVC codec proof
+
+The owner returned one `HVCT0001.HVC` after the manual test. Its read-only copy
+matched the card SHA-256, and the installed r14 manifest/binary hashes matched
+the expected package. FFprobe identifies HEVC, planar 8-bit 4:2:0, 320×180 and
+two frames. FFmpeg fully decoded it without errors; all 172,800 visible sample
+bytes match the independently generated expected patterns. The 184,649-byte
+codestream is identical to the emulator's equivalent file, with CRC32
+3,035,130,369. This establishes that the physical T6 executed our software
+encoder and saved the synthetic proof.
+
+Only the small file was present. The owner clarified that both larger sizes
+showed the cooperative 30-second limit. Neither a 4K nor an 8K HVC was published.
+The old build did not export phase telemetry, so the card does not establish
+which phase consumed the time. Its timestamps and decoder-default presentation
+rate are not capture-FPS measurements. These are generated pixels, with no live
+sensor source or audio.
+
 ## Earlier read-only USB identity check
 
 | Item | Observed result |

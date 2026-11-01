@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Decode the actual mocked-native writer's HVC and check every sample."""
 import json
+import csv
+import zlib
 from pathlib import Path
 import subprocess
 import sys
@@ -23,4 +25,20 @@ for frame in range(2):
         values=(3*x+5*y+29*frame if plane==0 else 64+7*x+3*y+11*frame if plane==1 else 192+2*x+9*y+13*frame)
         expected.append(values.astype(np.uint8).tobytes())
 assert decoded.stdout==b''.join(expected)
+if len(sys.argv)>2:
+    report=Path(sys.argv[2]).read_text()
+    rows=list(csv.reader(report.splitlines()))
+    assert all(len(row)==2 for row in rows) and len({row[0] for row in rows})==len(rows)
+    metadata=dict(rows)
+    assert metadata['type']=='synthetic_hevc_proof' and metadata['version']=='2'
+    assert metadata['optimization']=='native_Os_core_O2'
+    assert metadata['proof_state_name']=='saved' and metadata['hvc_verified']=='1' and metadata['hvc_published']=='1'
+    assert (int(metadata['width']),int(metadata['height']),int(metadata['frames_encoded']))==(320,180,2)
+    assert int(metadata['written_bytes'])==path.stat().st_size==int(metadata['accepted_bytes'])==int(metadata['codec_bytes_committed'])
+    assert int(metadata['crc32'])==zlib.crc32(path.read_bytes())
+    assert int(metadata['fio_write_calls'])==3 and int(metadata['fio_read_calls'])==6
+    assert int(metadata['fio_read_bytes'])==2*path.stat().st_size
+    assert int(metadata['buffer_bytes'])==65536 and int(metadata['workspace_bytes'])==5632
+    assert int(metadata['budget_ms'])==30000 and int(metadata['report_budget_ms'])==5000
+    assert metadata['camera_capture']=='0' and metadata['recording_fps_measured']=='0'
 print('Mocked native HVC: HEVC320x180/two distinct frames/exact sample recovery PASS')

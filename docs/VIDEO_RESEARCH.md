@@ -47,6 +47,13 @@ produces compressed HEVC on the host, but its ARM audit is not a native port:
 it retains POSIX/math dependencies and a function stack frame larger than the
 current film worker's stack. It is not linked into the camera artifact.
 
+The physical r14 camera has now saved the small two-frame HEVC proof with exact
+independent decode. The larger sizes reached its 30-second budget. The next
+diagnostic batches I/O through owned 64 KiB DMA memory, optimizes the small
+codec object and records durable per-run phase reports. Its selected-size
+budgets are 30/120/300 seconds. These are manual generated-pixel experiments;
+neither longer limits nor saved file dimensions establish live capture FPS.
+
 ## The existing display interface is not an encoder interface
 
 [ML display-filter callbacks](https://github.com/reticulatedpines/magiclantern_simplified/blob/142472e95054d73640f50789ac0fd66325499d82/src/module.h#L39)

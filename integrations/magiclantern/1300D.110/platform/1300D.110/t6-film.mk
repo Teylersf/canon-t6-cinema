@@ -15,6 +15,12 @@ $(BUILD_DIR)/soup_yuv_anamorphic_o2.o: $(SOUP_ENGINE)/yuv_anamorphic.c | $(BUILD
 	    -Dse_ya_apply=se_ya_apply_o2 -Dse_ya_preset=se_ya_preset_o2 \
 	    -Dse_ya_scratch_bytes=se_ya_scratch_bytes_o2 -c -o $@ $<
 
+# HEVC's per-byte writer is CPU-bound; optimize this one object for speed.
+# Native film_hevc.o retains inherited -Os (diagnostic label: native_Os_core_O2).
+# The original/renamed YUV comparison objects above are unchanged.
+$(BUILD_DIR)/soup_hevc_intra.o: $(SOUP_ENGINE)/hevc_intra.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CDEPS_FLAGS) -O2 -I$(SOUP_ENGINE) -c -o $@ $<
+
 $(BUILD_DIR)/soup_%.o: $(SOUP_ENGINE)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CDEPS_FLAGS) -I$(SOUP_ENGINE) -c -o $@ $<
 

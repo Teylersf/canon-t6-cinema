@@ -432,12 +432,12 @@ static struct menu_entry film_menu[] = {
         .name = "HEVC proof size", .priv = &film_hevc_size, .max = 2,
         .choices = CHOICES("320x180", "3840x2160", "7680x4320"),
         .help = "SYNTHETIC ONLY: generated pixels, two frames. Default 320x180.",
-        .help2 = "4K/8K writes large test files; no camera capture or recording.",
+        .help2 = "Time limits: 320=30s, 4K=120s, 8K=300s. Generated pixels only.",
     },
     {
         .name = "Generate HEVC proof", .select = film_generate_hevc,
         .help = "SYNTHETIC ONLY: two generated frames to a new HVCT file. Auto OFF.",
-        .help2 = "Outside LV/movie/capture. Stop cancels; cooperative 30s/128MiB.",
+        .help2 = "Outside LV/movie/capture. Stop cancels. 128MiB; size time limit.",
     },
 };
 

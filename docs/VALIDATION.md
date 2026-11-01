@@ -85,6 +85,7 @@ T6 with firmware 1.1.0; its private ROM1 dump matches the camera checksum.
   image uses 468,736 bytes and leaves 55,552 bytes in that reserve. Heap
   allocations and task stacks are separate.
   The r14 HEVC image uses 477,184 bytes and leaves 47,104 bytes.
+  The r15 diagnostic image uses 487,936 bytes and leaves 36,352 bytes.
 - The isolated symbolic video observer passes strict host tests, ASan/UBSan
   and freestanding ARM946E-S compilation. Tests cover storage boundaries,
   fixed field IDs, paired changes/failures, clock wrap, guard precedence,
@@ -108,6 +109,17 @@ T6 with firmware 1.1.0; its private ROM1 dump matches the camera checksum.
   recovered every visible pixel. The 8K attempt reached the cooperative budget
   after one frame and removed its owned TMP without publishing an HVC. The VM
   quit normally. These emulator durations are not physical throughput results.
+- The physical r14 T6 produced a 184,649-byte HEVC proof: two 320×180 frames,
+  independently decoded with exact expected samples and a codestream identical
+  to emulation. The owner reports the larger two tests stopped at 30 seconds;
+  no larger HVC was on the card. This proves the narrower synthetic codec/file
+  path and does not establish live sensor recording or an encoded capture rate.
+- The r15 writer's strict and sanitizer tests cover 64 KiB aggregation, short
+  flushes and tails, accepted-versus-written byte accounting, phase timing,
+  per-size budgets and independent diagnostic publication. Native emulation
+  saved all three two-frame sizes and their CSVs. Independent exported-file
+  decoding recovered exact pixels at 320×180, 4K and 8K; CSV fields matched
+  retained RAM and the full files' CRCs/counts. Physical r15 timing is pending.
 
 The initial reference produces 2592×1728 output from a real 1300D embedded JPEG.
 No desktop timing is presented as a T6 processing-speed measurement.

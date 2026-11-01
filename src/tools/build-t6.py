@@ -417,6 +417,11 @@ def package(stage, destination, log, toolchain):
         "synthetic_cpu_report_version": 2,
         "hevc_proof": "manual owned synthetic HEVC I_PCM; no live sensor capture or compression-performance claim",
         "hevc_encoder_workspace_bytes": 5632,
+        "hevc_proof_limits": {"frames": 2, "output_bytes": 128 * 1024 * 1024,
+                              "io_buffer_bytes": 64 * 1024,
+                              "size_budgets_ms": [30000, 120000, 300000],
+                              "report_budget_ms": 5000,
+                              "profile": "native_Os_core_O2"},
     }
     for path in sorted(destination.rglob("*")):
         if path.is_file():

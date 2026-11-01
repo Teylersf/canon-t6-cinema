@@ -36,8 +36,10 @@ not a complete Magic Lantern installer or a production-ready firmware release.
 - A manual **HEVC codec proof** generates two synthetic frames at 320×180,
   3840×2160 or 7680×4320 using a new small C encoder. It writes a new `.HVC`
   test file; this is not a sensor recording mode. The default size resets to
-  320×180 at boot. Native emulation generated and decoded the 320×180 and 4K
-  files; physical-camera proof is pending. See [HEVC experiments](#custom-hevc-experiments).
+  320×180 at boot. The physical T6's 320×180 file independently decodes to two
+  exact test frames. Native emulation also saved a valid 4K file; the physical
+  r14 4K/8K attempts reached their 30-second limit. See
+  [HEVC experiments](#custom-hevc-experiments).
 - Half-resolution embedded-JPEG processing: the tested real T6 sample produces
   **2592 × 1728** JPEGs. This is not full sensor-RAW development.
 - A desktop reference using the same C renderer, plus optional center crop and

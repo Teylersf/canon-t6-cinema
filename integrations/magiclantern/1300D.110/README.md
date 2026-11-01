@@ -96,20 +96,42 @@ every size. None of these measurements is a recording-FPS result.
 
 ## Manual HEVC codec proof
 
-The proof uses a cached, owned 5,632-byte encoder workspace and streams output
-without allocating a full frame. A 30-second cooperative budget, 128 MiB output
-cap and camera/cancel guards apply at CTU, write, readback and publication
-boundaries. A callback already running cannot be preempted. It runs only while
-idle outside capture, half-shutter, Live View, movie mode and recording.
+The proof uses a cached, owned 5,632-byte encoder workspace and a separately
+owned 64 KiB DMA buffer, without allocating a full frame. The buffer batches
+codec output into larger writes and then serves both verification passes.
+Only returned allocation aliases are accessed. The codec object receives an
+explicit trailing `-O2`; other native code keeps its existing optimization.
+
+Cooperative budgets are 30 seconds at 320×180, 120 seconds at 4K and 300 seconds
+at 8K, with a 128 MiB output cap. Camera/cancel guards apply at CTU, callback,
+actual write, readback and publication boundaries. A callback already running
+cannot be preempted. The proof runs only while idle outside capture,
+half-shutter, Live View, movie mode and recording.
 
 New files use `ML/FILM/HVCT0001.TMP` → `HVCT0001.HVC`, through slot 0016. Native
 0x8501 create-new semantics, no destructive fallback, streamed CRC32/length
 verification and guarded rename follow the existing publication protocol.
-The encoder workspace is freed before allocating the checked 4 KiB uncached
-readback buffer. Only a TMP created by this run may be removed. After rename,
+The encoder workspace is freed before readback, which reuses the checked
+64 KiB uncached buffer. A successful encoder return still requires the final
+buffered tail to be written. Accepted codec bytes and actual positive write
+returns are tracked separately, and CRC follows actual written bytes.
+Only a TMP created by this run may be removed. After rename,
 an interruption or verification failure retains the HVC and path but does not
 report it as verified. Existing files, photos, CPU reports and settings are not
 outputs of this operation.
+
+After releasing all proof resources, an idle run attempts a new
+`HVCR0001.CSV` through slot 0016. This ≤2 KiB diagnostic records requested size,
+proof outcome, progress, byte/CRC counts, five phase durations, allocation and
+optimization profile, and actual I/O call counts. Encoding-phase time includes
+pixel generation, writes, CRC and scheduler yields; it is not pure codec CPU
+time. Started/completed masks identify partial phases.
+
+The report has a fresh five-second budget and independent status. An idle
+proof deadline may therefore save diagnostics; Stop, capture or shutdown skip
+or interrupt them. Report errors never change the proof outcome. CSV creation
+uses its own exclusive TMP, exact readback through a checked 256-byte DMA
+allocation and guarded rename; a published CSV remains on later failure.
 
 The `.HVC` files are Annex-B HEVC streams, not Canon MOVs. They have no audio or
 declared capture FPS, and Canon playback is not established. I_PCM carries raw
