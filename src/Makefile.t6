@@ -1,0 +1,44 @@
+# T6-specific, reproducible host targets. Use make -f Makefile.t6 from src/.
+CC ?= cc
+CFLAGS ?= -std=c99 -O2 -g -Wall -Wextra -Wno-unused-parameter -DSE_HOSTED
+ENGINE := $(wildcard engine/*.c)
+HEADERS := $(wildcard engine/*.h)
+
+.PHONY: all test asan arm worker-test
+all: t6dev
+
+t6dev: host/t6dev.c $(ENGINE) $(HEADERS)
+	$(CC) $(CFLAGS) -Iengine host/t6dev.c $(ENGINE) -lm -o $@
+
+out/anamorphic_test: tools/anamorphic_test.c engine/anamorphic.c engine/se.c $(HEADERS)
+	mkdir -p out
+	$(CC) $(CFLAGS) -Iengine tools/anamorphic_test.c engine/anamorphic.c engine/se.c -o $@
+
+out/cr2_safety_test: tools/cr2_safety_test.c engine/cr2.c engine/jpeg_dec.c engine/se.c $(HEADERS)
+	mkdir -p out
+	$(CC) $(CFLAGS) -Iengine tools/cr2_safety_test.c engine/cr2.c engine/jpeg_dec.c engine/se.c -o $@
+
+out/stock_numeric_safety_test: tools/stock_numeric_safety_test.c engine/stock.c engine/look.c $(HEADERS)
+	mkdir -p out
+	$(CC) $(CFLAGS) -Wno-unused-but-set-variable -Iengine tools/stock_numeric_safety_test.c engine/stock.c engine/look.c engine/se.c engine/wb.c engine/grade.c engine/color.c engine/lut.c -lm -o $@
+
+test: all out/anamorphic_test out/cr2_safety_test out/stock_numeric_safety_test
+	./out/anamorphic_test
+	./out/cr2_safety_test ../doc/stocks.jpg $(wildcard samples/T6_CC0.CR2)
+	./out/stock_numeric_safety_test stocks/*.fs
+	python3 tools/test_t6_cli.py ./t6dev
+
+asan:
+	$(MAKE) -f Makefile.t6 t6dev out/anamorphic_test out/cr2_safety_test out/stock_numeric_safety_test -B CFLAGS='-std=c99 -O1 -g -Wall -Wextra -Wno-unused-parameter -DSE_HOSTED -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=all -fno-omit-frame-pointer -fno-pie -no-pie'
+	./out/anamorphic_test
+	./out/cr2_safety_test ../doc/stocks.jpg $(wildcard samples/T6_CC0.CR2)
+	./out/stock_numeric_safety_test stocks/*.fs
+	python3 tools/test_t6_cli.py ./t6dev
+
+worker-test:
+	$(MAKE) -C tools/t6_worker_test test
+
+arm:
+	mkdir -p out/t6-arm
+	arm-none-eabi-gcc -std=c99 -Os -Wall -Wextra -Werror -Wno-unused-parameter -mcpu=arm946e-s -marm -ffreestanding -fno-builtin -Iengine -c engine/anamorphic.c -o out/t6-arm/anamorphic.o
+	arm-none-eabi-size out/t6-arm/anamorphic.o

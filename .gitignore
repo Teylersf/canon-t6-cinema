@@ -9,3 +9,15 @@ src/ml/payload/mlstub-loader.bin
 src/ml/payload/mlstub-hook.bin
 src/ml/payload/soupeng.bin
 src/ml/build/
+src/vendor/
+src/samples/
+src/t6dev
+src/filmdev
+src/**/*.o
+src/**/*.d
+build/
+dist/
+test-output/
+out/
+__pycache__/
+*.pyc

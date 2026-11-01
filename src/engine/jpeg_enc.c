@@ -369,8 +369,11 @@ static void fdct(int32_t *d)
         tmp10 = tmp0 + tmp3; tmp13 = tmp0 - tmp3;
         tmp11 = tmp1 + tmp2; tmp12 = tmp1 - tmp2;
 
-        p[0] = (tmp10 + tmp11) << PASS1_BITS;
-        p[4] = (tmp10 - tmp11) << PASS1_BITS;
+        /* RGB8 DCT inputs bound these products well inside int32_t.
+         * Multiplication is defined for negative values; signed left shift
+         * is not, and optimizing ARM compilers may exploit that UB. */
+        p[0] = (tmp10 + tmp11) * (1 << PASS1_BITS);
+        p[4] = (tmp10 - tmp11) * (1 << PASS1_BITS);
 
         z1 = (tmp12 + tmp13) * FIX_0_541196100;
         p[2] = DESCALE(z1 + tmp13 * FIX_0_765366865, CONST_BITS - PASS1_BITS);

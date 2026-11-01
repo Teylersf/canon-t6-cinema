@@ -55,6 +55,8 @@ typedef struct {
      * flat bands of drifting colour.
      */
     int             ioerr;
+    int             real;       /* valid reservoir bits, excluding EOF padding */
+    int             corrupt;
 } jd_bits;
 
 #define JD_WINDOW 8192
@@ -65,6 +67,7 @@ static void jd_init(jd_bits *b, const uint8_t *p, size_t len)
     b->buf = 0; b->cnt = 0; b->marker = 0;
     b->read = 0; b->rctx = 0; b->win = 0;
     b->next_off = 0; b->remaining = 0; b->ioerr = 0;
+    b->real = b->corrupt = 0;
 }
 
 /*
@@ -98,9 +101,11 @@ static void jd_fill(jd_bits *b)
 {
     while (b->cnt <= 24) {
         uint32_t c = 0;
+        int real = 0;
         if (!b->marker && b->pos + 1 >= b->len) jd_refill(b);
         if (!b->marker && b->pos < b->len) {
             c = b->p[b->pos++];
+            real = 8;
             if (c == 0xff) {
                 uint8_t d = (b->pos < b->len) ? b->p[b->pos] : 0xd9;
                 if (d == 0x00) {
@@ -109,6 +114,7 @@ static void jd_fill(jd_bits *b)
                     b->pos--;                /* a real marker */
                     b->marker = 1;
                     c = 0;
+                    real = 0;
                 }
             }
         } else {
@@ -116,6 +122,7 @@ static void jd_fill(jd_bits *b)
         }
         b->buf |= c << (24 - b->cnt);
         b->cnt += 8;
+        b->real += real;
     }
 }
 
@@ -123,10 +130,13 @@ static uint32_t jd_get(jd_bits *b, int n)
 {
     uint32_t v;
     if (!n) return 0;
+    if (n < 0 || n > 16) { b->corrupt = 1; return 0; }
     if (b->cnt < n) jd_fill(b);
+    if (n > b->real) b->corrupt = 1;
     v = b->buf >> (32 - n);
     b->buf <<= n;
     b->cnt  -= n;
+    b->real = n > b->real ? 0 : b->real - n;
     return v;
 }
 
@@ -166,13 +176,15 @@ typedef struct {
     int      present;
 } jd_huff;
 
-static void jd_huff_build(jd_huff *h)
+static int jd_huff_build(jd_huff *h)
 {
     int code = 0, k = 0, i, j;
 
     for (i = 0; i < 256; i++) h->look[i] = 0;
 
     for (i = 1; i <= 16; i++) {
+        if (h->bits[i] > (1 << i) - code || k + h->bits[i] > 256)
+            return -1;
         h->valptr[i]  = k;
         h->mincode[i] = code;
         /* Fill the short-code table as we go: a code of length i occupies
@@ -193,6 +205,7 @@ static void jd_huff_build(jd_huff *h)
         code <<= 1;
     }
     h->maxcode[17] = 0x7fffffff;
+    return k ? 0 : -1;
 }
 
 static int jd_decode(jd_bits *b, const jd_huff *h)
@@ -209,8 +222,7 @@ static int jd_decode(jd_bits *b, const jd_huff *h)
     e = h->look[b->buf >> 24];
     if (e) {
         l = (int)(e & 31);
-        b->buf <<= l;
-        b->cnt  -= l;
+        (void)jd_get(b, l);
         return (int)(e >> 5);
     }
 
@@ -219,7 +231,7 @@ static int jd_decode(jd_bits *b, const jd_huff *h)
         code = (code << 1) | (int)jd_get(b, 1);
         l++;
     }
-    if (l > 16) return 0;
+    if (l > 16 || code < h->mincode[l]) { b->corrupt = 1; return 0; }
     return h->vals[h->valptr[l] + code - h->mincode[l]];
 }
 
@@ -269,7 +281,7 @@ static int jd_flat(const int *in, int n)
 
 static void jd_fill_block(uint8_t *out, int stride, int n, int dc)
 {
-    int v = JD_DESCALE(JD_DESCALE(5793 * dc, 11) * 5793, 17) + 128;
+    int64_t v = JD_DESCALE(JD_DESCALE((int64_t)5793 * dc, 11) * 5793, 17) + 128;
     int x, y;
     uint8_t c = (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
     for (y = 0; y < n; y++)
@@ -278,7 +290,7 @@ static void jd_fill_block(uint8_t *out, int stride, int n, int dc)
 
 static void jd_idct(const int *in, uint8_t *out, int stride)
 {
-    int tmp[64];
+    int64_t tmp[64];
     int u, x, y;
 
     if (jd_flat(in, 8)) { jd_fill_block(out, stride, 8, in[0]); return; }
@@ -286,8 +298,8 @@ static void jd_idct(const int *in, uint8_t *out, int stride)
     /* columns: for each column x, transform the 8 vertical coefficients */
     for (x = 0; x < 8; x++) {
         for (y = 0; y < 8; y++) {
-            int acc = 0;
-            for (u = 0; u < 8; u++) acc += jd_ct[u][y] * in[u * 8 + x];
+            int64_t acc = 0;
+            for (u = 0; u < 8; u++) acc += (int64_t)jd_ct[u][y] * in[u * 8 + x];
             tmp[y * 8 + x] = JD_DESCALE(acc, 11);
         }
     }
@@ -295,7 +307,7 @@ static void jd_idct(const int *in, uint8_t *out, int stride)
     for (y = 0; y < 8; y++) {
         uint8_t *o = out + y * stride;
         for (x = 0; x < 8; x++) {
-            int acc = 0;
+            int64_t acc = 0;
             for (u = 0; u < 8; u++) acc += jd_ct[u][x] * tmp[y * 8 + u];
             acc = JD_DESCALE(acc, 17) + 128;
             o[x] = (uint8_t)(acc < 0 ? 0 : acc > 255 ? 255 : acc);
@@ -331,22 +343,22 @@ static void jd_idct(const int *in, uint8_t *out, int stride)
  */
 static void jd_idct4(const int *in, uint8_t *out, int stride)
 {
-    int tmp[16];
+    int64_t tmp[16];
     int u, x, y;
 
     if (jd_flat(in, 4)) { jd_fill_block(out, stride, 4, in[0]); return; }
 
     for (x = 0; x < 4; x++) {
         for (y = 0; y < 4; y++) {
-            int acc = 0;
-            for (u = 0; u < 4; u++) acc += jd_ct[u * 2][y] * in[u * 8 + x];
+            int64_t acc = 0;
+            for (u = 0; u < 4; u++) acc += (int64_t)jd_ct[u * 2][y] * in[u * 8 + x];
             tmp[y * 4 + x] = JD_DESCALE(acc, 11);
         }
     }
     for (y = 0; y < 4; y++) {
         uint8_t *o = out + y * stride;
         for (x = 0; x < 4; x++) {
-            int acc = 0;
+            int64_t acc = 0;
             for (u = 0; u < 4; u++) acc += jd_ct[u * 2][x] * tmp[y * 4 + u];
             acc = JD_DESCALE(acc, 17) + 128;
             o[x] = (uint8_t)(acc < 0 ? 0 : acc > 255 ? 255 : acc);
@@ -374,6 +386,7 @@ typedef struct {
     int      restart;
     uint16_t qt[4][64];
     jd_huff  hdc[4], hac[4];
+    unsigned qt_present;
     jd_comp  c[JD_MAXCOMP];
 } jd_state;
 
@@ -408,12 +421,15 @@ static se_err jd_parse(const uint8_t *d, size_t len, jd_state *s,
         case 0xc0:                                        /* SOF0 baseline */
         case 0xc1: {
             const uint8_t *q = d + p + 2;
-            int i;
+            int i, j;
+            if (l < 8) return SE_E_TRUNCATED;
             if (q[0] != 8) return SE_E_UNSUPPORTED;       /* 8-bit only */
             s->h = jd_rd16(q + 1);
             s->w = jd_rd16(q + 3);
             s->ncomp = q[5];
-            if (s->ncomp < 1 || s->ncomp > 3) return SE_E_UNSUPPORTED;
+            if (s->ncomp != 1 && s->ncomp != 3) return SE_E_UNSUPPORTED;
+            if ((size_t)l != 8 + (size_t)s->ncomp * 3) return SE_E_CORRUPT;
+            if (!s->w || !s->h) return SE_E_CORRUPT;
             s->hmax = s->vmax = 1;
             for (i = 0; i < s->ncomp; i++) {
                 const uint8_t *r = q + 6 + i * 3;
@@ -421,11 +437,17 @@ static se_err jd_parse(const uint8_t *d, size_t len, jd_state *s,
                 s->c[i].hs = r[1] >> 4;
                 s->c[i].vs = r[1] & 15;
                 s->c[i].tq = r[2];
+                if (s->c[i].tq >= 4) return SE_E_CORRUPT;
+                for (j = 0; j < i; j++)
+                    if (s->c[j].id == s->c[i].id) return SE_E_CORRUPT;
                 if (s->c[i].hs < 1 || s->c[i].hs > 2 ||
                     s->c[i].vs < 1 || s->c[i].vs > 2) return SE_E_UNSUPPORTED;
                 if (s->c[i].hs > s->hmax) s->hmax = s->c[i].hs;
                 if (s->c[i].vs > s->vmax) s->vmax = s->c[i].vs;
             }
+            /* The row renderer treats component zero as full-resolution Y. */
+            if (s->c[0].hs != s->hmax || s->c[0].vs != s->vmax)
+                return SE_E_UNSUPPORTED;
             break;
         }
         case 0xc2: case 0xc3: case 0xc5: case 0xc6: case 0xc7:
@@ -437,17 +459,25 @@ static se_err jd_parse(const uint8_t *d, size_t len, jd_state *s,
             const uint8_t *q = d + p + 2;
             const uint8_t *e = d + p + l;
             while (q < e) {
-                int tc = q[0] >> 4, th = q[0] & 15, i, n = 0;
+                int tc, th, i, n = 0;
                 jd_huff *t;
-                if (th > 3) return SE_E_CORRUPT;
+                if ((size_t)(e - q) < 17) return SE_E_TRUNCATED;
+                tc = q[0] >> 4; th = q[0] & 15;
+                if (tc > 1 || th > 3) return SE_E_CORRUPT;
                 t = tc ? &s->hac[th] : &s->hdc[th];
                 q++;
                 t->bits[0] = 0;
                 for (i = 1; i <= 16; i++) { t->bits[i] = *q++; n += t->bits[i]; }
-                if (n > 256 || q + n > e) return SE_E_CORRUPT;
-                for (i = 0; i < n; i++) t->vals[i] = q[i];
+                if (n > 256 || (size_t)n > (size_t)(e - q)) return SE_E_CORRUPT;
+                for (i = 0; i < n; i++) {
+                    int sz = q[i] & 15;
+                    if ((!tc && q[i] > 11) || (tc &&
+                        (sz > 10 || (!sz && q[i] != 0 && q[i] != 0xf0))))
+                        return SE_E_CORRUPT;
+                    t->vals[i] = q[i];
+                }
                 q += n;
-                jd_huff_build(t);
+                if (jd_huff_build(t) != 0) return SE_E_CORRUPT;
                 t->present = 1;
             }
             break;
@@ -457,29 +487,45 @@ static se_err jd_parse(const uint8_t *d, size_t len, jd_state *s,
             const uint8_t *e = d + p + l;
             while (q < e) {
                 int pq = q[0] >> 4, tq = q[0] & 15, i;
-                if (tq > 3) return SE_E_CORRUPT;
+                if (pq > 1 || tq > 3) return SE_E_CORRUPT;
                 q++;
+                if ((size_t)(e - q) < (pq ? 128u : 64u)) return SE_E_TRUNCATED;
                 for (i = 0; i < 64; i++) {
                     s->qt[tq][jd_zigzag[i]] =
                         pq ? jd_rd16(q + i * 2) : q[i];
+                    if (!s->qt[tq][jd_zigzag[i]]) return SE_E_CORRUPT;
                 }
                 q += pq ? 128 : 64;
+                s->qt_present |= 1u << tq;
             }
             break;
         }
         case 0xdd:                                        /* DRI */
+            if (l != 4) return SE_E_CORRUPT;
             s->restart = jd_rd16(d + p + 2);
             break;
 
         case 0xda: {                                      /* SOS */
             const uint8_t *q = d + p + 2;
-            int ns = q[0], i, j;
+            int ns, i, j;
+            if (l < 6) return SE_E_TRUNCATED;
+            ns = q[0];
+            if (ns != s->ncomp || ns < 1 ||
+                (size_t)l != 6 + (size_t)ns * 2) return SE_E_UNSUPPORTED;
+            if (q[1 + ns * 2] != 0 || q[2 + ns * 2] != 63 || q[3 + ns * 2] != 0)
+                return SE_E_UNSUPPORTED;
             for (i = 0; i < ns; i++) {
                 int cid = q[1 + i * 2], tt = q[2 + i * 2];
+                if ((tt >> 4) > 3 || (tt & 15) > 3) return SE_E_CORRUPT;
+                /* Only interleaved scans in frame order are implemented. */
+                if (cid != s->c[i].id) return SE_E_UNSUPPORTED;
                 for (j = 0; j < s->ncomp; j++)
                     if (s->c[j].id == cid) {
                         s->c[j].td = tt >> 4;
                         s->c[j].ta = tt & 15;
+                        if (!s->hdc[s->c[j].td].present ||
+                            !s->hac[s->c[j].ta].present ||
+                            !(s->qt_present & (1u << s->c[j].tq))) return SE_E_CORRUPT;
                     }
             }
             *scan_off = p + l;
@@ -582,6 +628,7 @@ static se_err jd_run(const uint8_t *d, size_t len,
     if (!rgb) return SE_E_NOMEM;
 
     if (rd) {
+        if (scan > total) return SE_E_TRUNCATED;
         if (s->restart) {
             /* Resynchronising means scanning forward for a marker, which a
              * window that only moves forward cannot do. Canon's previews
@@ -612,12 +659,13 @@ static se_err jd_run(const uint8_t *d, size_t len,
             if (s->restart && ((my * s->mcux + mx) % s->restart) == 0 &&
                 (my || mx)) {
                 /* resynchronise: skip to the RSTn and reset the predictors */
-                bits.cnt = 0; bits.buf = 0; bits.marker = 0;
+                bits.cnt = 0; bits.buf = 0; bits.marker = 0; bits.real = 0;
                 while (bits.pos + 1 < bits.len &&
                        !(bits.p[bits.pos] == 0xff &&
                          bits.p[bits.pos + 1] >= 0xd0 &&
                          bits.p[bits.pos + 1] <= 0xd7))
                     bits.pos++;
+                if (bits.pos + 1 >= bits.len) return SE_E_TRUNCATED;
                 bits.pos += 2;
                 for (ci = 0; ci < s->ncomp; ci++) s->c[ci].dcpred = 0;
             }
@@ -630,20 +678,24 @@ static se_err jd_run(const uint8_t *d, size_t len,
                         int t, k = 1, diff;
                         memset(blk, 0, sizeof blk);
                         t = jd_decode(&bits, &s->hdc[c->td]);
+                        if (t > 11) return SE_E_CORRUPT;
                         diff = jd_extend(jd_get(&bits, t), t);
                         c->dcpred += diff;
+                        if (c->dcpred < -2048 || c->dcpred > 2047) return SE_E_CORRUPT;
                         blk[0] = c->dcpred * s->qt[c->tq][0];
                         while (k < 64) {
                             int rs = jd_decode(&bits, &s->hac[c->ta]);
                             int r = rs >> 4, sz = rs & 15;
                             if (!sz) { if (r != 15) break; k += 16; continue; }
                             k += r;
-                            if (k > 63) break;
+                            if (k > 63) return SE_E_CORRUPT;
                             blk[jd_zigzag[k]] =
                                 jd_extend(jd_get(&bits, sz), sz) *
                                 s->qt[c->tq][jd_zigzag[k]];
                             k++;
                         }
+                        if (bits.ioerr) return SE_E_IO;
+                        if (bits.corrupt) return SE_E_CORRUPT;
                         {
                             uint8_t *o = c->plane
                                 + (size_t)by * s->bs * c->pw

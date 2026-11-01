@@ -36,13 +36,25 @@ static size_t tiff_typesize(uint16_t t)
 /* Read entry `idx` of the IFD at `ifd_off`. Returns 0 on success. */
 static int tiff_entry(se_rd *r, uint32_t ifd_off, int idx, tif_entry *e)
 {
-    size_t base = (size_t)ifd_off + 2 + (size_t)idx * 12;
-    size_t vsz;
+    size_t base, ts, vsz;
+    if (idx < 0 || (size_t)ifd_off > r->len ||
+        r->len - (size_t)ifd_off < 2 ||
+        (size_t)idx > (r->len - (size_t)ifd_off - 2) / 12) {
+        r->err = 1;
+        return -1;
+    }
+    base = (size_t)ifd_off + 2 + (size_t)idx * 12;
+    if (r->len - base < 12) { r->err = 1; return -1; }
     se_rd_seek(r, base);
     e->tag   = se_rd_u16(r);
     e->type  = se_rd_u16(r);
     e->count = se_rd_u32(r);
-    vsz = tiff_typesize(e->type) * (size_t)e->count;
+    ts = tiff_typesize(e->type);
+    if (!ts || (size_t)e->count > (size_t)-1 / ts) {
+        r->err = 1;
+        return -1;
+    }
+    vsz = ts * (size_t)e->count;
     if (vsz > 4) {
         e->voff = se_rd_u32(r);
     } else {
@@ -64,7 +76,13 @@ static uint32_t tiff_val(se_rd *r, const tif_entry *e, uint32_t i)
 {
     size_t sz = tiff_typesize(e->type);
     if (i >= e->count || sz == 0) return 0;
-    se_rd_seek(r, e->voff + i * sz);
+    if ((size_t)e->voff > r->len ||
+        (size_t)i > (r->len - (size_t)e->voff) / sz ||
+        r->len - (size_t)e->voff - (size_t)i * sz < sz) {
+        r->err = 1;
+        return 0;
+    }
+    se_rd_seek(r, (size_t)e->voff + (size_t)i * sz);
     switch (sz) {
     case 1: return se_rd_u8(r);
     case 2: return se_rd_u16(r);
@@ -78,7 +96,13 @@ static float tiff_rational(se_rd *r, const tif_entry *e, uint32_t i)
     uint32_t num, den;
     if (e->type != TIFF_RATIONAL && e->type != TIFF_SRATIONAL) return 0.0f;
     if (i >= e->count) return 0.0f;
-    se_rd_seek(r, e->voff + i * 8);
+    if ((size_t)e->voff > r->len ||
+        (size_t)i > (r->len - (size_t)e->voff) / 8 ||
+        r->len - (size_t)e->voff - (size_t)i * 8 < 8) {
+        r->err = 1;
+        return 0.0f;
+    }
+    se_rd_seek(r, (size_t)e->voff + (size_t)i * 8);
     num = se_rd_u32(r);
     den = se_rd_u32(r);
     if (!den) return 0.0f;
@@ -280,8 +304,12 @@ static se_err parse_raw_ifd(se_rd *r, uint32_t off, se_cr2_info *out)
         }
     }
 
-    if (!out->raw_width && out->slice_count >= 0 && out->slice_width > 0)
-        out->raw_width = out->slice_count * out->slice_width + out->slice_last;
+    if (r->err) return SE_E_TRUNCATED;
+    if (!out->raw_width && out->slice_count >= 0 && out->slice_width > 0) {
+        uint64_t width = (uint64_t)out->slice_count * out->slice_width + out->slice_last;
+        if (width > 65535) return SE_E_CORRUPT;
+        out->raw_width = (int)width;
+    }
 
     if (compression != 6) {
         se_log("cr2: raw IFD compression=%d, expected 6 (old JPEG)", compression);
@@ -289,6 +317,15 @@ static se_err parse_raw_ifd(se_rd *r, uint32_t off, se_cr2_info *out)
     }
     if (!out->strip_offset || !out->strip_bytes)
         return SE_E_BADFILE;
+    if (out->raw_width <= 0 || out->raw_width > 65535 ||
+        out->raw_height <= 0 || out->raw_height > 65535 ||
+        (uint64_t)out->raw_width * out->raw_height > 0x7fffffffU)
+        return SE_E_CORRUPT;
+    if (out->slice_count < 0 || (out->slice_count &&
+        (out->slice_width <= 0 || out->slice_last <= 0 ||
+         (uint64_t)out->slice_count * out->slice_width + out->slice_last !=
+         (uint64_t)out->raw_width)))
+        return SE_E_CORRUPT;
     return SE_OK;
 }
 
@@ -326,6 +363,9 @@ se_err se_cr2_parse(const void *buf, size_t len, se_cr2_info *out)
         out->crop_right  = out->raw_width  - 1;
         out->crop_bottom = out->raw_height - 1;
     }
+    if (out->crop_left < 0 || out->crop_top < 0 ||
+        out->crop_right >= out->raw_width || out->crop_bottom >= out->raw_height)
+        return SE_E_CORRUPT;
     out->active_width  = out->crop_right  - out->crop_left + 1;
     out->active_height = out->crop_bottom - out->crop_top  + 1;
 
@@ -405,6 +445,8 @@ typedef struct {
      * reached the camera and was reported rc=0.
      */
     int            ioerr;
+    int            real;      /* reservoir bits read from the file, not padding */
+    int            corrupt;
 } jbits;
 
 #define JB_WINDOW 8192
@@ -415,6 +457,7 @@ static void jb_init(jbits *b, const uint8_t *p, size_t len)
     b->buf = 0; b->cnt = 0; b->marker = 0;
     b->read = 0; b->rctx = 0; b->win = 0;
     b->next_off = 0; b->remaining = 0; b->ioerr = 0;
+    b->real = b->corrupt = 0;
 }
 
 /*
@@ -460,11 +503,13 @@ static void jb_fill(jbits *b)
 {
     while (b->cnt <= 24) {
         uint32_t c = 0xff;   /* pad with 1-bits past the end, like libjpeg */
+        int real = 0;
         /* Keep at least two bytes available so the 0xFF lookahead below
          * never falls off the end of the window. */
-        if (b->pos + 1 >= b->len) jb_refill(b);
-        if (b->pos < b->len) {
+        if (!b->marker && b->pos + 1 >= b->len) jb_refill(b);
+        if (!b->marker && b->pos < b->len) {
             c = b->p[b->pos++];
+            real = 8;
             if (c == 0xff) {
                 uint8_t d = (b->pos < b->len) ? b->p[b->pos] : 0xd9;
                 if (d == 0x00) {
@@ -473,6 +518,7 @@ static void jb_fill(jbits *b)
                     b->pos--;             /* real marker: stop consuming */
                     b->marker = 1;
                     c = 0;
+                    real = 0;
                 }
             }
         } else {
@@ -481,26 +527,30 @@ static void jb_fill(jbits *b)
         }
         b->buf |= c << (24 - b->cnt);
         b->cnt += 8;
+        b->real += real;
     }
 }
 
 static void jb_skip(jbits *b, int n)
 {
+    if (n < 0 || n > b->real) b->corrupt = 1;
     b->buf <<= n;
     b->cnt  -= n;
+    b->real = n > b->real ? 0 : b->real - n;
 }
 
 static uint32_t jb_get(jbits *b, int n)
 {
     uint32_t v;
     if (n == 0) return 0;
+    if (n < 0 || n > 16) { b->corrupt = 1; return 0; }
     if (b->cnt < n) jb_fill(b);
     v = b->buf >> (32 - n);
     jb_skip(b, n);
     return v;
 }
 
-static void jhuff_build(jhuff *h)
+static int jhuff_build(jhuff *h)
 {
     int l, i, k = 0, code = 0;
     int32_t huffcode[257];
@@ -508,6 +558,8 @@ static void jhuff_build(jhuff *h)
     /* Canonical code assignment: codes of each length are consecutive, and
      * each step up in length shifts the running code left by one. */
     for (l = 1; l <= 16; l++) {
+        if (h->nbits[l] > (1 << l) - code || k + h->nbits[l] > 256)
+            return -1;
         h->valptr[l]  = k;
         h->mincode[l] = code;
         for (i = 0; i < h->nbits[l]; i++) huffcode[k++] = code++;
@@ -529,6 +581,7 @@ static void jhuff_build(jhuff *h)
         }
     }
     h->present = 1;
+    return k ? 0 : -1;
 }
 
 static int jhuff_decode(jbits *b, const jhuff *h)
@@ -548,9 +601,10 @@ static int jhuff_decode(jbits *b, const jhuff *h)
     code = 0;
     for (l = 1; l <= 16; l++) {
         code = (code << 1) | (int)jb_get(b, 1);
-        if (h->nbits[l] && code <= h->maxcode[l])
+        if (h->nbits[l] && code >= h->mincode[l] && code <= h->maxcode[l])
             return h->huffval[h->valptr[l] + (code - h->mincode[l])];
     }
+    b->corrupt = 1;
     return 0;
 }
 
@@ -561,7 +615,7 @@ static int jhuff_diff(jbits *b, const jhuff *h)
     int v;
     if (s == 0)  return 0;
     if (s == 16) return -32768;          /* lossless JPEG special case */
-    if (s > 16)  return 0;
+    if (s > 16) { b->corrupt = 1; return 0; }
     v = (int)jb_get(b, s);
     if (v < (1 << (s - 1))) v -= (1 << s) - 1;
     return v;
@@ -611,18 +665,22 @@ static se_err ljpeg_header(const uint8_t *p, size_t len, jhead *jh)
 
         switch (marker) {
         case 0xc3: {  /* SOF3: lossless, Huffman */
-            if (seg + 6 > len) return SE_E_TRUNCATED;
+            if (seglen < 8) return SE_E_TRUNCATED;
             jh->prec = p[seg];
             jh->high = (p[seg + 1] << 8) | p[seg + 2];
             jh->wide = (p[seg + 3] << 8) | p[seg + 4];
             jh->clrs = p[seg + 5];
+            if (jh->prec < 2 || jh->prec > 16 || !jh->wide || !jh->high)
+                return SE_E_UNSUPPORTED;
             if (jh->clrs < 1 || jh->clrs > JPEG_MAX_COMP) {
                 se_log("ljpeg: %d components, unsupported", jh->clrs);
                 return SE_E_UNSUPPORTED;
             }
+            if ((size_t)seglen < 8 + (size_t)jh->clrs * 3)
+                return SE_E_TRUNCATED;
             for (i = 0; i < jh->clrs; i++) {
                 size_t c = seg + 6 + (size_t)i * 3;
-                if (c + 3 > len) return SE_E_TRUNCATED;
+                if (c + 3 > pos + seglen) return SE_E_TRUNCATED;
                 if (p[c + 1] != 0x11) {
                     se_log("ljpeg: component %d subsampled (%02x)", i, p[c + 1]);
                     return SE_E_UNSUPPORTED;
@@ -636,7 +694,7 @@ static se_err ljpeg_header(const uint8_t *p, size_t len, jhead *jh)
             while (c < pos + seglen) {
                 int tc, th, total = 0, l;
                 jhuff *h;
-                if (c + 17 > len) return SE_E_TRUNCATED;
+                if (pos + seglen - c < 17) return SE_E_TRUNCATED;
                 tc = p[c] >> 4;
                 th = p[c] & 15;
                 c++;
@@ -651,16 +709,21 @@ static se_err ljpeg_header(const uint8_t *p, size_t len, jhead *jh)
                     total += h->nbits[l];
                 }
                 c += 16;
-                if (total > 256 || c + (size_t)total > len) return SE_E_TRUNCATED;
-                for (l = 0; l < total; l++) h->huffval[l] = p[c + l];
+                if (total > 256 || (size_t)total > pos + seglen - c)
+                    return SE_E_TRUNCATED;
+                for (l = 0; l < total; l++) {
+                    if (p[c + l] > 16) return SE_E_CORRUPT;
+                    h->huffval[l] = p[c + l];
+                }
                 c += total;
-                jhuff_build(h);
+                if (jhuff_build(h) != 0) return SE_E_CORRUPT;
             }
             break;
         }
 
         case 0xdd:   /* DRI */
-            if (seg + 2 <= len) {
+            if (seglen != 4) return SE_E_TRUNCATED;
+            {
                 int ri = (p[seg] << 8) | p[seg + 1];
                 if (ri) jh->restart = ri;
             }
@@ -669,20 +732,23 @@ static se_err ljpeg_header(const uint8_t *p, size_t len, jhead *jh)
         case 0xda: {  /* SOS: the scan header, then entropy data */
             int ns;
             size_t c = seg;
-            if (c + 1 > len) return SE_E_TRUNCATED;
+            if (seglen < 6) return SE_E_TRUNCATED;
             ns = p[c++];
             if (ns != jh->clrs) {
                 se_log("ljpeg: SOS has %d components, SOF had %d", ns, jh->clrs);
                 return SE_E_UNSUPPORTED;
             }
+            if (ns < 1 || (size_t)seglen != 6 + (size_t)ns * 2)
+                return SE_E_CORRUPT;
             for (i = 0; i < ns; i++) {
-                if (c + 2 > len) return SE_E_TRUNCATED;
+                if ((p[c + 1] >> 4) >= JPEG_MAX_COMP || (p[c + 1] & 15))
+                    return SE_E_CORRUPT;
                 jh->comp_td[i] = p[c + 1] >> 4;
                 c += 2;
             }
-            if (c + 3 > len) return SE_E_TRUNCATED;
             jh->psv = p[c];
             jh->pt  = p[c + 2] & 15;
+            if (jh->pt >= jh->prec || (p[c + 2] >> 4)) return SE_E_CORRUPT;
             jh->scan_off = pos + seglen;
             if (jh->psv != 1) {
                 /*
@@ -731,6 +797,18 @@ static se_err cr2_decode_core(const void *buf, size_t len,
     long expected;
     uint8_t *hdrbuf = 0;
 
+    if (!info || !sink || !scratch || info->raw_width <= 0 ||
+        info->raw_width > 65535 || info->raw_height <= 0 ||
+        info->raw_height > 65535 ||
+        (uint64_t)info->raw_width * info->raw_height > 0x7fffffffU ||
+        info->slice_count < 0 || (info->slice_count &&
+        (info->slice_width <= 0 || info->slice_last <= 0 ||
+         (uint64_t)info->slice_count * info->slice_width + info->slice_last !=
+         (uint64_t)info->raw_width)))
+        return SE_E_CORRUPT;
+    if (info->strip_offset > UINT32_MAX - info->strip_bytes)
+        return SE_E_TRUNCATED;
+
     jh = SE_NEW(scratch, jhead, 1);
     if (!jh) return SE_E_NOMEM;
 
@@ -750,7 +828,8 @@ static se_err cr2_decode_core(const void *buf, size_t len,
         strip    = hdrbuf;
         striplen = want;
     } else {
-        if ((size_t)info->strip_offset + info->strip_bytes > len)
+        if ((size_t)info->strip_offset > len ||
+            (size_t)info->strip_bytes > len - (size_t)info->strip_offset)
             return SE_E_TRUNCATED;
         strip    = (const uint8_t *)buf + info->strip_offset;
         striplen = info->strip_bytes;
@@ -764,12 +843,15 @@ static se_err cr2_decode_core(const void *buf, size_t len,
 
     se_log("ljpeg: %dx%d x%d comps, %d-bit, pt=%d -> %ld samples (need %ld)",
            jh->wide, jh->high, jh->clrs, jh->prec, jh->pt,
-           (long)jwide * jh->high, expected);
+           (long)((uint64_t)jwide * jh->high), expected);
 
-    if ((long)jwide * jh->high != expected) {
+    if ((uint64_t)jwide * jh->high != (uint64_t)expected) {
         se_log("ljpeg: sample count mismatch, refusing to guess the layout");
         return SE_E_CORRUPT;
     }
+    if (!info->slice_count && (jwide != info->raw_width || jh->high != info->raw_height))
+        return SE_E_CORRUPT;
+    if (jh->restart != 0x7fffffff) return SE_E_UNSUPPORTED;
 
     rowbuf = SE_NEW(scratch, uint16_t, jwide);
     if (!rowbuf) return SE_E_NOMEM;
@@ -798,7 +880,7 @@ static se_err cr2_decode_core(const void *buf, size_t len,
     } else {
         jb_init(&bits, strip + jh->scan_off, striplen - jh->scan_off);
     }
-    for (c = 0; c < JPEG_MAX_COMP; c++) vpred[c] = 1 << (jh->prec - 1);
+    for (c = 0; c < JPEG_MAX_COMP; c++) vpred[c] = 1 << (jh->prec - jh->pt - 1);
 
     for (jrow = 0; jrow < jh->high; jrow++) {
         uint16_t *rp = rowbuf;
@@ -824,12 +906,12 @@ static se_err cr2_decode_core(const void *buf, size_t len,
             for (c = 0; c < jh->clrs; c++) {
                 int diff = jhuff_diff(&bits, &jh->huff[jh->comp_td[c]]);
                 int pred;
+                uint32_t sample;
                 if (jcol) {
-                    pred = rp[-jh->clrs];
+                    pred = rp[-jh->clrs] >> jh->pt;
                 } else {
                     /* start of a line predicts from the sample above */
                     pred = vpred[c];
-                    vpred[c] += diff;
                 }
                 /*
                  * Shift as unsigned: on a corrupt file the predictor can
@@ -837,7 +919,10 @@ static se_err cr2_decode_core(const void *buf, size_t len,
                  * undefined behaviour even though every real compiler
                  * happens to do the arithmetic shift we want.
                  */
-                *rp++ = (uint16_t)((uint32_t)(pred + diff) << jh->pt);
+                sample = ((uint32_t)pred + (uint32_t)diff) &
+                         ((1u << (jh->prec - jh->pt)) - 1u);
+                if (!jcol) vpred[c] = (int)sample;
+                *rp++ = (uint16_t)(sample << jh->pt);
             }
         }
 
@@ -847,6 +932,7 @@ static se_err cr2_decode_core(const void *buf, size_t len,
          * state and handed back as though it were the picture.
          */
         if (bits.ioerr) return SE_E_IO;
+        if (bits.corrupt) return SE_E_CORRUPT;
 
         /* --- place this JPEG row into the raw frame --------------------- */
         if (info->slice_count == 0) {
@@ -904,9 +990,6 @@ static se_err cr2_decode_core(const void *buf, size_t len,
             if (pct != last_pct) { se_progress("decode", pct); last_pct = pct; }
         }
     }
-
-    if (bits.marker && jrow < jh->high)
-        se_log("ljpeg: entropy data ended early at row %d/%d", jrow, jh->high);
 
     se_progress("decode", 100);
     return SE_OK;
@@ -984,7 +1067,8 @@ se_err se_cr2_find_preview(const void *buf, size_t len,
 
     /* Compression 6 is Canon's "old-style JPEG" tag for this preview. */
     if (comp != 6 || !so || !sb) return SE_E_UNSUPPORTED;
-    if ((size_t)so + 2 > len) return SE_E_TRUNCATED;
+    if (r.err || (size_t)so > len || len - (size_t)so < 2 || sb < 2 ||
+        so > UINT32_MAX - sb) return SE_E_TRUNCATED;
 
     /* Confirm it really starts with SOI before promising a JPEG. */
     {

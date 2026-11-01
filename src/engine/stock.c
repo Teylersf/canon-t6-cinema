@@ -53,7 +53,12 @@ static float pick_exposure(const se_stock *s, int src)
 
 /* ------------------------------------------------------------ parsing */
 
-typedef struct { const char *p, *end; } sc;
+typedef struct { const char *p, *end; int invalid; } sc;
+
+/* Stock controls are normally below a few hundred. Keep even deliberately
+ * extreme edits finite and safely representable by the downstream fixed-
+ * point/int conversions, including VERSION's immediate cast. */
+#define SC_NUMBER_MAX 1000000.0f
 
 static void sc_sp(sc *t)   { while (t->p < t->end && (*t->p == ' ' || *t->p == '\t')) t->p++; }
 static void sc_line(sc *t) { while (t->p < t->end && *t->p != '\n') t->p++; if (t->p < t->end) t->p++; }
@@ -82,21 +87,34 @@ static void sc_rest(sc *t, char *dst, size_t n)
 
 static int sc_float(sc *t, float *out)
 {
-    int   neg = 0, any = 0;
+    int   neg = 0, any = 0, bad = 0;
     float v = 0.0f, scale;
     sc_sp(t);
     if (t->p >= t->end) return 0;
+    if (*t->p == '\n' || *t->p == '\r' || *t->p == '#' || *t->p == ';') return 0;
     if (*t->p == '+' || *t->p == '-') { neg = (*t->p == '-'); t->p++; }
     while (t->p < t->end && *t->p >= '0' && *t->p <= '9') {
-        v = v * 10.0f + (float)(*t->p - '0'); t->p++; any = 1;
+        float digit = (float)(*t->p - '0');
+        if (!bad) {
+            if (v > (SC_NUMBER_MAX - digit) / 10.0f) bad = 1;
+            else v = v * 10.0f + digit;
+        }
+        t->p++; any = 1;
     }
     if (t->p < t->end && *t->p == '.') {
         t->p++; scale = 0.1f;
         while (t->p < t->end && *t->p >= '0' && *t->p <= '9') {
-            v += (float)(*t->p - '0') * scale; scale *= 0.1f; t->p++; any = 1;
+            if (!bad) {
+                v += (float)(*t->p - '0') * scale;
+                if (v > SC_NUMBER_MAX) bad = 1;
+            }
+            scale *= 0.1f; t->p++; any = 1;
         }
     }
-    if (!any) return 0;
+    if (!any || (t->p < t->end && *t->p != ' ' && *t->p != '\t' &&
+        *t->p != '\n' && *t->p != '\r' && *t->p != ',' &&
+        *t->p != '#' && *t->p != ';')) bad = 1;
+    if (bad) { t->invalid = 1; return 0; }
     *out = neg ? -v : v;
     return 1;
 }
@@ -151,7 +169,7 @@ se_err se_stock_parse(const char *text, size_t len, se_stock *s)
     unknown[0] = 0;
 
     se_stock_init(s);
-    t.p = text; t.end = text + len;
+    t.p = text; t.end = text + len; t.invalid = 0;
 
     while (t.p < t.end) {
         sc_sp(&t);
@@ -270,6 +288,14 @@ se_err se_stock_parse(const char *text, size_t len, se_stock *s)
         sc_line(&t);
     }
 
+    /* The exposure multiplier is 2^EV; the generic numeric cap alone
+     * would still allow infinity/NaN to be produced during curve baking. */
+    if (t.invalid || s->exposure < -32.0f || s->exposure > 32.0f ||
+        s->raw.exposure < -32.0f || s->raw.exposure > 32.0f) {
+        se_log("stock: invalid or excessive numeric value");
+        se_stock_init(s);
+        return SE_E_BADFILE;
+    }
     if (!got_name) {
         se_log("stock: file has no NAME");
         return SE_E_BADFILE;

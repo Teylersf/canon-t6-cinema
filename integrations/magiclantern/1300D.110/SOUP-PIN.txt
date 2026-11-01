@@ -1,0 +1,7 @@
+T6 Cinema experimental build target: EOS Rebel T6 / 1300D / Kiss X80.
+Canon firmware 1.1.0 only; not 1.2.0, T6i/750D or T5/1200D.
+Magic Lantern commit 142472e95054d73640f50789ac0fd66325499d82
+Soup Engine base d393e4df4ec3ae5d98038b5dc5c2607b05236076
+https://github.com/reticulatedpines/magiclantern_simplified
+https://github.com/jiijii0/soup-engine
+No inherited 5D/50D ROM addresses, binary hooks, preview writes or RAW deletion.
