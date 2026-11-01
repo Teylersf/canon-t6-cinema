@@ -52,6 +52,13 @@ formula for requested sensor timing does not establish which frames the encoder
 actually saves. Calibrate the constants and observe the complete recording path
 before using them as evidence of a ceiling or a basis for experimental writes.
 
+Private, read-only ROM analysis now identifies the H.264 request chain and
+separate 720p, Full HD and VGA YUV paths. A comparison against a numeric frame
+rate in shared firmware code is not evidence that this camera accepts that
+rate: some such branches lead to assertions. No new recording mode or measured
+FPS ceiling follows from these static findings. No sensor registers were
+written and no FPS override was enabled during this inspection.
+
 ## Measurement contract
 
 The objective is **independently captured, uniquely timed frames saved to a

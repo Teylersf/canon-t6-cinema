@@ -34,6 +34,11 @@
 #define FILM_MAX_OUTPUT (8u * 1024 * 1024)
 #define FILM_MAX_BATCH 4
 #define FILM_DEADLINE_MS (5u * 60 * 1000)
+/* 1300D.110 native flags, verified with its actual ROM in the emulator:
+ * write=0x0001, create=0x0100, exclusive=0x0400, check-existing=0x8000.
+ * Truncate 0x0200 is deliberately ABSENT. The global ML O_CREAT/O_EXCL
+ * definitions differ; do not change those camera-independent macros. */
+#define FILM_T6_CREATE_NEW 0x8501u
 
 extern int ml_started;
 
@@ -183,6 +188,7 @@ static int film_develop(const char *source, const char *destination, const char 
         film_t6_set_status("Output exists; left untouched");
         return 1;
     }
+    film_t6_set_processing(1);
     if (FIO_GetFileSize(source, &source_size) || !source_size || source_size > FILM_MAX_INPUT)
         goto done;
     msleep(600);
@@ -226,10 +232,12 @@ static int film_develop(const char *source, const char *destination, const char 
         se_anamorphic_begin(&job.effect, &effect, width, height, &effect_arena) != SE_OK) goto done;
     if (film_abort(&job) || is_file(temporary) || is_file(destination)) goto done;
     /* ML's FIO_CreateFile first removes an existing path. Never use it here.
-     * Ask DryOS for exclusive creation and abort if it rejects these flags;
+     * Ask this T6 firmware for exclusive creation, including its required
+     * existing-name lookup, and abort if it rejects the native flags;
      * there is deliberately no create/truncate/remove-and-retry fallback.
-     * O_EXCL behavior still requires validation on physical 1300D.110. */
-    job.output = FIO_OpenFile(temporary, O_WRONLY | O_CREAT | O_EXCL);
+     * New-file and late-collision paths were tested using actual firmware in
+     * the emulator; physical 1300D.110 validation is still outstanding. */
+    job.output = FIO_OpenFile(temporary, FILM_T6_CREATE_NEW);
     if (!job.output) goto done;
     created = 1;
     memset(&exif, 0, sizeof(exif));
@@ -269,6 +277,7 @@ done:
     if (stock) free(stock);
     if (look) free(look);
     if (metadata) free(metadata);
+    film_t6_set_processing(0);
     film_t6_set_status(rc == 0 ? "JPEG saved; CR2 untouched" :
         film_t6_cancelled() ? "Cancelled; CR2 untouched" : "Failed; CR2 untouched");
     return rc;

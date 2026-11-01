@@ -1,7 +1,13 @@
 # T6 ROM acquisition status
 
-The connected T6 reports Canon firmware **1.1.0**. No ROM dump or camera-side
-execution was completed during preparation of this note.
+The connected T6 reports Canon firmware **1.1.0**. The owner ran the official
+portable dumper and returned its output on a 16 GB card formatted by the camera.
+Both 32 MiB dumps, checksum files and the rescue log were copied into ignored
+private storage and checked against their source-card copies.
+
+ROM1 matches the camera-generated MD5. ROM0 does not: its entire contents are
+one repeated four-byte pattern. ROM0 is not a validated firmware image. See the
+[emulator limitations](../integrations/qemu/README.md).
 
 The ML developer's [portable dumper post](https://www.magiclantern.fm/forum/index.php?topic=16534.msg161097#msg161097)
 links [DMP1300D.FIR](https://a1ex.magiclantern.fm/debug/portable-rom-dumper/new/DMP1300D.FIR).
@@ -22,11 +28,12 @@ authenticated publisher checksum. Its encrypted payload was not successfully
 decoded; exact source/binary equivalence and HMAC authentication remain
 unverified.
 
-The spare card initially had a dirty filesystem. After the user confirmed its
-old files were disposable, it was formatted as FAT32 and reported Healthy / OK,
-with the dirty flag clear. The unchanged official dumper was then staged and
-read back with the same SHA-256. No bootable-card flags, camera bootflags or
-camera firmware execution were performed.
+An earlier 32 GB spare card was reformatted after the owner confirmed its data
+was disposable, but camera compatibility was not established. The successful
+dump used a different 16 GB card formatted in the T6. The unchanged official
+dumper was copied to its root and read back with the same SHA-256 before use.
+The rescue log reported the camera BOOT flag as zero. The film overlay has not
+yet booted on the physical camera.
 
 Keep resulting ROM files and RESCUE.LOG private and outside Git. Check generated
 MD5 files against the actual dumps before emulator work; historical reports

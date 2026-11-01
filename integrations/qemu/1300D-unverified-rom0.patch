@@ -1,0 +1,25 @@
+--- a/hw/eos/eos.c
++++ b/hw/eos/eos.c
+@@ -921,7 +921,21 @@
+     
+     fprintf(stderr, "\n");
+ 
+-    check_rom_mirroring(buf + offset, size, size);
++    /* T6 diagnostic exception: retain observed, unverified ROM0 bus data.
++     * This does not validate ROM0 or change the emulated memory map.
++     * All other ROM inputs retain the normal mirroring check. */
++    if (strcmp(eos_state->model->name, MODEL_NAME_1300D) == 0 &&
++        strcmp(file_rel, "ROM0.BIN") == 0 && offset == 0 &&
++        size == 0x02000000 &&
++        memcmp(buf, buf + 4, size - 4) == 0)
++    {
++        fprintf(stderr, "[EOS] WARNING: unverified periodic T6 ROM0 input; "
++                        "continuing emulator-only ROM1 startup diagnostics\n");
++    }
++    else
++    {
++        check_rom_mirroring(buf + offset, size, size);
++    }
+ 
+     if (swap_endian) {
+         reverse_bytes_order(buf + offset, size);

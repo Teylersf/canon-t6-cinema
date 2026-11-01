@@ -7,6 +7,7 @@
 #include "lens.h"
 #include "film_t6.h"
 #include "jpeg_dec.h"
+#include "native_format.h"
 
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL %d: %s\n", __LINE__, #c); exit(1); } } while (0)
 #define SOURCE "A:/DCIM/100CANON/IMG_0001.CR2"
@@ -24,6 +25,7 @@ static int inject_cancel, inject_busy, inject_auto_off, inject_write_failure;
 static int inject_source_growth, inject_rename_failure, inject_tmp_race;
 static int short_reads, read_calls, inject_read_failure, inject_deadline, inject_shutdown;
 static int inject_open_race, reject_exclusive, exclusive_opens, legacy_creates;
+static int inject_destination_race;
 static char status[80];
 int ml_started = 1, ml_shutdown_requested;
 struct mock_lens_info lens_info;
@@ -71,6 +73,7 @@ static void reset(void)
     inject_source_growth = inject_rename_failure = inject_tmp_race = short_reads = 0;
     read_calls = inject_read_failure = inject_deadline = inject_shutdown = 0;
     inject_open_race = reject_exclusive = exclusive_opens = legacy_creates = 0;
+    inject_destination_race = 0;
     ml_shutdown_requested = 0; status[0] = 0;
 }
 unsigned get_ms_clock(void) { return clock_ms; }
@@ -93,9 +96,10 @@ FILE *FIO_OpenFile(const char *path, unsigned mode)
     entry *e = find(path);
     if (!strcmp(path, SOURCE) && mode != O_RDONLY) source_ops++;
     if (mode == O_RDONLY) return e ? (FILE *)new_handle(e, 0) : NULL;
-    /* Model an API that honors O_EXCL. Rejection models a body that does not
-     * support this combination; the worker must fail without a fallback. */
-    if (mode != (O_WRONLY | O_CREAT | O_EXCL) || strcmp(path, TEMP)) return NULL;
+    /* Independently fixed to the actual 1300D.110 ROM contract. Do not use
+     * the production constant or global ML macros here: the former 0xC1
+     * and lookup-missing 0x501 combinations must not accidentally pass. */
+    if (mode != 0x8501u || strcmp(path, TEMP)) return NULL;
     exclusive_opens++;
     /* The competing file appears AFTER the worker's last existence check,
      * inside the actual open. An existence precheck cannot protect it. */
@@ -167,7 +171,10 @@ int FIO_RenameFile(const char *src, const char *dst)
 {
     entry *e = find(src);
     if (!strcmp(src, SOURCE) || !strcmp(dst, SOURCE)) source_ops++;
-    CHECK(!strcmp(src, TEMP) && !strcmp(dst, DEST) && !find(dst));
+    CHECK(!strcmp(src, TEMP) && !strcmp(dst, DEST));
+    /* Match the actual-ROM late-destination collision result. */
+    if (inject_destination_race && !find(dst)) make_entry(DEST, "KEEPDEST", 8, 1);
+    if (find(dst)) return -1;
     if (inject_rename_failure) return -1;
     CHECK(e); snprintf(e->path, sizeof(e->path), "%s", dst); renames++; return 0;
 }
@@ -193,8 +200,11 @@ void film_t6_clear_cancel(void) { cancel_now = 0; }
 void film_t6_snapshot(struct film_t6_settings *s) { snprintf(s->stock, sizeof(s->stock), "portra.fs"); s->effect = 2; s->amber = 0; }
 void film_t6_load_stocks(void) {}
 void film_t6_set_status(const char *s) { snprintf(status, sizeof(status), "%s", s); }
+void film_t6_set_processing(int processing) { (void)processing; }
 
+#define snprintf t6_mock_snprintf
 #include "../../../integrations/magiclantern/1300D.110/src/film_develop.c"
+#undef snprintf
 
 static uint8_t *load(const char *path, size_t *size)
 {
@@ -225,6 +235,10 @@ int main(int argc, char **argv)
     entry *e;
     se_jdec_info info;
     CHECK(argc == 3); fixture = load(argv[1], &fixture_len); recipe = load(argv[2], &recipe_len);
+    reset();
+    CHECK((O_WRONLY | O_CREAT | O_EXCL) == 0xc1u); /* upstream macros unchanged */
+    CHECK(!FIO_OpenFile(TEMP, 0xc1u) && !find(TEMP) && !creates);
+    CHECK(!FIO_OpenFile(TEMP, 0x501u) && !find(TEMP) && !creates);
     reset(); short_reads = 1;
     CHECK(develop(0) == 0);
     e = find(DEST); CHECK(e && !find(TEMP) && creates == 1 && renames == 1 && !removes);
@@ -254,6 +268,10 @@ int main(int argc, char **argv)
     reset(); inject_busy = 1; failed_cleanly(); CHECK(creates == 1 && removes == 1);
     reset(); inject_write_failure = 1; failed_cleanly(); CHECK(creates == 1 && removes == 1);
     reset(); inject_rename_failure = 1; failed_cleanly(); CHECK(creates == 1 && removes == 1);
+    reset(); inject_destination_race = 1;
+    CHECK(develop(0) == -1 && find(DEST) && find(DEST)->len == 8 &&
+          !memcmp(find(DEST)->data, "KEEPDEST", 8) && !find(TEMP) &&
+          creates == 1 && removes == 1 && !renames);
     reset(); inject_source_growth = 1; failed_cleanly(); CHECK(!creates);
     reset(); inject_source_growth = 2; failed_cleanly(); CHECK(creates == 1 && removes == 1);
     reset(); inject_read_failure = 1; failed_cleanly(); CHECK(creates == 1 && removes == 1);

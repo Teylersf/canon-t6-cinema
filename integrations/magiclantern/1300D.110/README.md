@@ -7,8 +7,13 @@ Kiss X80 with Canon firmware **1.1.0 only**. T6i/750D, T5/1200D and firmware
 
 This adds a **T6 Film** page to Magic Lantern's existing menus. It retains the
 pinned upstream 1300D platform, entry points and original limited features.
-There are no borrowed 5D/50D ROM addresses, replacement GUI hooks, sensor-mode
-changes, RAW video unlocks, or live video effects.
+There are no borrowed 5D/50D ROM addresses, sensor-mode changes, RAW video unlocks,
+or live video effects. The optional Retro dashboard uses native custom-menu
+drawing and checked source-level button gates in the pinned ML event chain;
+it adds no binary GUI-hook patch or new firmware address. It remains hardware
+untested. See the repository's `docs/RETRO_UI.md` for controls and verification.
+The staged ML menu uses explicit open/close intent so a shutter handler and
+pending redraw cannot accidentally close and then reopen the menu.
 
 The worker reads the JPEG preview embedded in a CR2, grades it with a Soup
 film stock, applies optional anamorphic-inspired highlight streaks, bloom,
@@ -31,22 +36,32 @@ from the embedded preview; use a color Picture Style for color stocks.
   even when automatic processing is off. It does not scan a card or select
   arbitrary historical files.
 - **Film stock:** reads up to 16 validated names from `ML/FILM/INDEX.TXT`.
+  The package uses stable 8.3 filenames for the four longer source filenames;
+  recipe names and ordering stay the same. Native T6 emulation could not open
+  those long paths but could read their short aliases. Do not substitute the
+  desktop index for the packaged index.
 - **Cinema effects:** OFF, Subtle, Cinema, Strong. **Streak tint:** Blue or Amber.
 - **Cancel / stop auto:** disables automatic processing and cancels at a row or
   I/O boundary. Shutting down also requests cancellation.
 
 Output beside `IMG_1234.CR2`: `T6F_1234.JPG`, via a new `T6F_1234.TMP`.
 The worker refuses detected existing output or temporary files. It requests
-temporary creation with `FIO_OpenFile(O_WRONLY | O_CREAT | O_EXCL)`. A rejected
-exclusive open aborts the job; there is no fallback to `FIO_CreateFile`, whose
-upstream implementation removes existing paths. Only a temporary file opened
-by the current job can be cleaned up. **DryOS exclusive-create flag behavior
-has not been validated on a physical 1300D.110**; desktop mock behavior is not
-proof of those firmware semantics. A successful job checks encoded length and
-JPEG start/end markers before publishing its output.
-The destination is rechecked before native `FIO_RenameFile`. Its behavior if
-another writer creates the destination after that check remains unverified on
-this camera; publication is not claimed to be an atomic no-overwrite operation.
+temporary creation with T6-native flags **0x8501**: write 0x1, create 0x100,
+exclusive 0x400 and check-existing 0x8000. Truncate 0x200 is absent. The global ML
+`O_CREAT`/`O_EXCL` macros remain unchanged; their combined 0xC1 value is unsuitable
+for this native T6 operation. A rejected open aborts the job; there is no fallback
+to `FIO_CreateFile`, whose upstream implementation removes existing paths. Only
+a temporary file opened by the current job can be cleaned up. A successful job
+checks encoded length and JPEG start/end markers before publishing its output.
+The destination is rechecked before native `FIO_RenameFile`.
+
+**Actual-firmware emulator tests** completed a valid 1728-row JPEG, rejected a
+TMP created after the final existence check with EEXIST (17), and rejected a
+destination created immediately before native rename with return -1. Both
+collisions preserved all eight pre-existing bytes. See the repository's
+`docs/NATIVE_FILE_IO.md`. These native paths are emulator-tested and
+**physical-camera untested**; publication is not claimed to be universally
+atomic, nor do emulator results establish real-card behavior or responsiveness.
 Failed frames remain unchanged and may be retried with Develop latest.
 Source file size must be stable for 600 ms. The worker waits while Canon reports
 a capture job, the shutter is half-pressed, or movie mode is selected; a new
@@ -76,8 +91,9 @@ engine there, and compiles a distinct experiment. Source checkout, boot flags,
 camera and memory cards are not modified. `--prepare-only` stages without
 compiling. No `--card`, install or flash option exists.
 
-Output includes `AUTOEXEC.BIN`, matching `ML/modules/t6_110.sym`, film-stock
-files, this README, source/artifact hashes, build log and a manifest. These are
+Output includes `AUTOEXEC.BIN`, matching `ML/modules/t6_110.sym`, required bitmap
+fonts under `ML/FONTS`, film-stock files, this README, source/artifact hashes,
+build log and a manifest. Keep these assets together. These are
 an experimental overlay, **not a complete Magic Lantern card distribution**.
 Use only a matching, already-working upstream 1300D.110 environment; installation
 and physical-camera validation are separate steps. Preserve the original

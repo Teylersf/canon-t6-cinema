@@ -1,7 +1,8 @@
 # Validation status
 
-Tested on the development computer, not a physical T6. The camera's owner
-reported Canon firmware 1.1.0; no camera was connected for the initial build.
+The film overlay has not been tested on a physical T6. The owner's camera was
+identified through read-only USB DeviceInfo as firmware 1.1.0 and supplied a
+private ROM1 dump with a matching camera-generated checksum.
 
 ## Established
 
@@ -20,9 +21,31 @@ reported Canon firmware 1.1.0; no camera was connected for the initial build.
   byte-for-byte for Portra / Cinema / blue / scale 2 / quality 88. EXIF text differs.
 - Worker success, failure, cancellation and contention tests preserve original
   files and existing output files; newly owned partial files are cleaned up.
+- The actual T6 ROM reaches Canon's shooting display and our ML menus in QEMU.
+  The retro dashboard renders with the pinned bitmap fonts; its emulated dial,
+  D-pad, SET, Q and DISP controls alter the expected state.
+- Native ROM diagnostic runs establish T6-specific create-new behavior and
+  preserve files inserted immediately before creation or rename. Independent
+  JPEG decoding and source-file hash verification passed. See
+  [native file-I/O evidence](NATIVE_FILE_IO.md) for the diagnostic method.
+- Native menu/worker formatting regressions, button release pairing, queued
+  menu-close races, cancellation and bounded drawing tests pass sanitizers.
+- Native T6 file-size/open probes reject four long recipe filenames while their
+  short FAT aliases succeed. Camera packages therefore use stable 8.3 recipe
+  filenames and a matching index; desktop source filenames are preserved. The
+  final r11 native run loads all thirteen named recipes.
+- The final native emulation run closes the dashboard and ML menu on two short
+  half-shutter pulses and remains closed after an additional 1.2 seconds each.
+  The checked T6 menu-intent patch prevents duplicate close wakes reopening it;
+  its actual staged helper/consumer also pass sanitizer scheduling regressions.
+- The Windows card utility passes 1,288 fixture checks, including a sparse-file
+  integration test and AddressSanitizer. Its physical read-only inspection was
+  denied by Windows with error 5; no card-sector write was attempted.
 
 The initial reference produces 2592×1728 output from a real 1300D embedded JPEG.
 No desktop timing is presented as a T6 processing-speed measurement.
+Emulation uses a derived ROM1 reset sector and an explicitly unvalidated ROM0
+mapping. It is startup/UI/API evidence, not a sensor or recording benchmark.
 
 ## Not established
 

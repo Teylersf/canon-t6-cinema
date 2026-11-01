@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,14 @@ SOUP_BASE = "d393e4df4ec3ae5d98038b5dc5c2607b05236076"
 PLATFORM = "1300D.110"
 ENGINE_FILES = ["se", "cr2", "stock", "look", "jpeg_dec", "jpeg_enc",
                 "wb", "color", "grade", "lut", "anamorphic"]
+FONT_FILES = ["term12.rbf", "term20.rbf", "arghlf22.rbf", "argnor23.rbf",
+              "argnor28.rbf", "argnor32.rbf"]
+STOCK_PACKAGE_NAMES = {
+    "bleachbypass.fs": "bleach.fs",
+    "classicchrome.fs": "classchr.fs",
+    "classicneg.fs": "classneg.fs",
+    "nostalgicneg.fs": "nostneg.fs",
+}
 
 
 def fail(message):
@@ -43,6 +52,152 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def sanitize_build_identity(stage):
+    """Replace two exactly pinned recipes in the isolated archive only.
+
+    Upstream otherwise embeds the local account and host in AUTOEXEC.BIN.
+    Keep timestamps and the private stage path, but use a public build identity.
+    """
+    path = stage / "platform" / "Makefile"
+    text = path.read_text()
+    identity = "`whoami`@`hostname`"
+    markers = [
+        "\t@echo 'Built on : '`date -u \"+%Y-%m-%d %H:%M:%S\"`' by '`whoami`@`hostname` >> $@.tmp\n",
+        "\t@echo 'const char build_user[] = \"'`whoami`@`hostname`'\";'  >> $(BUILD_DIR)/version.tmp\n",
+    ]
+    if text.count(identity) != 2 or any(text.count(marker) != 1 for marker in markers):
+        fail("build identity recipe mismatch in pinned platform/Makefile")
+    for marker in markers:
+        text = text.replace(marker, marker.replace(identity, "T6-Cinema-source-build"))
+    path.write_text(text)
+
+
+def patch_retro_ui(stage):
+    """Checked source patches in an isolated, exactly pinned ML archive only.
+
+    Startup/powersave/shutdown handling runs before the new gate. All existing
+    feature handlers retain their order. Native handoff skips only the AV menu
+    shortcut and ML-menu actions; it never skips the core event/safety chain.
+    """
+    def replace(path, marker, replacement):
+        text = path.read_text()
+        if text.count(marker) != 1:
+            fail("retro UI marker mismatch in " + str(path.relative_to(stage)))
+        path.write_text(text.replace(marker, replacement))
+
+    common = stage / "src/gui-common.c"
+    replace(common, "#include <lvinfo.h>\n",
+            '#include <lvinfo.h>\n#include "film_retro_native.h"\n')
+    marker = '    /* convert Q replacement events into BGMT_Q */\n'
+    replace(common, marker,
+            '    /* T6 Cinema: startup, shutdown and powersave checks above remain native. */\n'
+            '    int t6_retro_route = film_retro_event_gate(event);\n'
+            '    if (t6_retro_route == 0) return 0;\n\n' + marker)
+    marker = ('    #ifdef CONFIG_MENU_WITH_AV\n'
+              '    if (handle_av_short_for_menu(event) == 0) return 0;\n'
+              '    #endif\n')
+    replace(common, marker,
+            '    #ifdef CONFIG_MENU_WITH_AV\n'
+            '    if (t6_retro_route != 2 && handle_av_short_for_menu(event) == 0) return 0;\n'
+            '    #endif\n')
+    menu = stage / "src/menu.c"
+    replace(menu, '#include "menu.h"\n',
+            '#include "menu.h"\n#include "film_retro_native.h"\n')
+    marker = ('    // on some cameras, scroll events may arrive grouped; we can\'t handle it, so split into individual events\n')
+    replace(menu, marker,
+            '    /* Handoff only bypasses menu actions, after native display checks. */\n'
+            '    if (film_retro_menu_passthrough(event)) return 1;\n\n' + marker)
+
+    # The pinned menu semaphore carries untyped toggles. A half-press key and
+    # the redraw task can both request closure before either wake is consumed,
+    # reopening the menu. In this T6 archive only, publish an absolute intent
+    # first; the semaphore then only wakes the consumer. A delayed wake cannot
+    # turn a completed close into an open. Keep all native close producers.
+    replace(menu, '            // close ML menu\n            give_semaphore(gui_sem);\n',
+            '            // close ML menu\n            t6_menu_request(T6_MENU_CLOSE);\n')
+    replace(menu, '        redraw_flood_stop = 1;\n        give_semaphore(gui_sem);\n',
+            '        redraw_flood_stop = 1;\n        t6_menu_request(T6_MENU_CLOSE);\n')
+    replace(menu, 'gui_stop_menu( )\n{\n    if (gui_menu_shown())\n        give_semaphore(gui_sem);\n}',
+            'gui_stop_menu( )\n{\n    t6_menu_request(T6_MENU_CLOSE);\n}')
+    replace(menu, 'gui_open_menu( )\n{\n    if (!gui_menu_shown())\n        give_semaphore(gui_sem);\n}',
+            'gui_open_menu( )\n{\n    t6_menu_request(T6_MENU_OPEN);\n}')
+    text = menu.read_text()
+    if text.count('give_semaphore( gui_sem );') != 4 or 'give_semaphore(gui_sem);' in text:
+        fail('T6 menu semaphore producer mismatch in pinned src/menu.c')
+    menu.write_text(text.replace('give_semaphore( gui_sem );',
+                                 't6_menu_request(T6_MENU_TOGGLE);'))
+    replace(menu, '#include "film_retro_native.h"\n',
+            '#include "film_retro_native.h"\n#include "arm-mcr.h"\n')
+    marker = 'static int menu_shown = false;\n'
+    replace(menu, marker, marker + '''
+/* T6 menu intent helper begin: also compiled by the host scheduling test. */
+enum { T6_MENU_CLOSE, T6_MENU_OPEN, T6_MENU_TOGGLE };
+static volatile int t6_menu_desired_state;
+static void t6_menu_request(int intent)
+{
+    /* cli/sei have no compiler memory clobber in the pinned ARM helpers. */
+    __asm__ __volatile__("" ::: "memory");
+    uint32_t irq = cli();
+    __asm__ __volatile__("" ::: "memory");
+    int desired = intent == T6_MENU_TOGGLE
+        ? !t6_menu_desired_state : intent == T6_MENU_OPEN;
+    int changed = desired != t6_menu_desired_state;
+    t6_menu_desired_state = desired;
+    __asm__ __volatile__("" ::: "memory");
+    sei(irq);
+    __asm__ __volatile__("" ::: "memory");
+    /* Never invoke DryOS while interrupts are disabled. Another wake may
+     * consume this intent before this post; applying it again is harmless. */
+    if (changed)
+        give_semaphore(gui_sem);
+}
+/* T6 menu intent helper end. */
+''')
+    marker = '''            /* menu toggle request */
+            if (menu_shown)
+            {
+                menu_close();
+            }
+            else
+            {
+                menu_open();
+                initial_mode = shooting_mode;
+            }
+'''
+    replace(menu, marker, '''            /* T6 menu intent consumer begin. */
+            int desired = t6_menu_desired_state;
+            if (desired && !menu_shown)
+            {
+                menu_open();
+                initial_mode = shooting_mode;
+            }
+            else if (!desired && menu_shown)
+            {
+                menu_close();
+            }
+            /* T6 menu intent consumer end. */
+''')
+    # This alternative task is disabled upstream, but must not retain toggle
+    # semantics if it is selected while using the same request helper.
+    marker = '''        if( !menu_shown )
+        {
+            //~ menu_shown = true;
+            menu_open();
+        }
+        else
+        {
+            menu_close();
+            //~ menu_shown = false;
+        }
+'''
+    replace(menu, marker, '''        int desired = t6_menu_desired_state;
+        if (desired && !menu_shown)
+            menu_open();
+        else if (!desired && menu_shown)
+            menu_close();
+''')
+
+
 def check_source(source):
     if output(["git", "rev-parse", "HEAD"], source) != ML_PIN:
         fail("ML checkout must be exactly " + ML_PIN)
@@ -59,6 +214,9 @@ def check_source(source):
             fail("missing engine source: " + name)
     if not (OVERLAY / "src" / "film_develop.c").is_file():
         fail("missing 1300D overlay")
+    for name in FONT_FILES:
+        if not (source / "data" / "fonts" / name).is_file():
+            fail("missing pinned ML bitmap font: " + name)
 
 
 def extract_source(source, stage):
@@ -89,6 +247,8 @@ def extract_source(source, stage):
         for path in (stage / name).rglob("*"):
             if path.is_file():
                 hashes[original + "/" + path.relative_to(stage / name).as_posix()] = sha256(path)
+    for name in FONT_FILES:
+        hashes["data/fonts/" + name] = sha256(stage / "data" / "fonts" / name)
     shutil.copy2(Path(__file__), metadata / "build-t6.py")
     shutil.copy2(ROOT / "LICENSE", metadata / "LICENSE")
     hashes["src/tools/build-t6.py"] = sha256(metadata / "build-t6.py")
@@ -100,6 +260,44 @@ def extract_source(source, stage):
     if text.count(marker) != 1:
         fail("unexpected pinned platform Makefile layout")
     makefile.write_text(text.replace(marker, "include t6-film.mk\n\n" + marker))
+    patch_retro_ui(stage)
+    sanitize_build_identity(stage)
+
+
+def package_stocks(source, destination):
+    """Use stable 8.3 names for Canon FIO; keep source names and bodies intact."""
+    index = source / "INDEX.TXT"
+    if not index.is_file() or index.is_symlink():
+        fail("missing regular stock INDEX.TXT")
+    entries = index.read_text(encoding="ascii").splitlines()
+    if not entries or len({name.casefold() for name in entries}) != len(entries):
+        fail("stock index must contain existing, unique recipe names")
+    mapping = {}
+    packaged_names = set()
+    for name in entries:
+        if not re.fullmatch(r"[A-Za-z0-9_]{1,64}\.fs", name):
+            fail("invalid stock index filename: " + repr(name))
+        recipe = source / name
+        if not recipe.is_file() or recipe.is_symlink():
+            fail("indexed stock recipe is missing or not a regular file: " + name)
+        packaged = STOCK_PACKAGE_NAMES.get(name, name)
+        if not re.fullmatch(r"[A-Za-z0-9_]{1,8}\.[A-Za-z0-9_]{1,3}", packaged):
+            fail("packaged stock filename is not 8.3: " + packaged)
+        if packaged.casefold() in packaged_names:
+            fail("packaged stock filenames collide: " + packaged)
+        packaged_names.add(packaged.casefold())
+        mapping[name] = packaged
+    available = {path.name.casefold() for path in source.iterdir()
+                 if path.is_file() and path.suffix.casefold() == ".fs"}
+    if available != {name.casefold() for name in entries}:
+        fail("stock index must list every source recipe exactly once")
+    # Validate the whole plan before creating or copying any packaged files.
+    destination.mkdir()
+    for original, packaged in mapping.items():
+        shutil.copy2(source / original, destination / packaged)
+    (destination / "INDEX.TXT").write_text(
+        "".join(mapping[name] + "\n" for name in entries), encoding="ascii")
+    return mapping
 
 
 def package(stage, destination, log, toolchain):
@@ -110,10 +308,16 @@ def package(stage, destination, log, toolchain):
     modules.mkdir(parents=True)
     shutil.copy2(platform / "t6_110.sym", modules / "t6_110.sym")
     stocks = destination / "ML" / "FILM"
-    stocks.mkdir()
-    for path in (stage / "t6_stocks").iterdir():
-        if path.suffix == ".fs" or path.name == "INDEX.TXT":
-            shutil.copy2(path, stocks / path.name)
+    stock_file_map = package_stocks(stage / "t6_stocks", stocks)
+    # Without these assets ML falls back to Canon's much larger font, breaking
+    # both the native menus and the retro dashboard's measured layout.
+    fonts = destination / "ML" / "FONTS"
+    fonts.mkdir()
+    for name in FONT_FILES:
+        source_font = stage / "data" / "fonts" / name
+        if source_font.read_bytes()[:8] != b"\xe0\x0e\xf0\x0d\x03\x00\x00\x00":
+            fail("unexpected pinned RBF font header: " + name)
+        shutil.copy2(source_font, fonts / name)
     shutil.copy2(stage / "t6_inputs" / "README.md", destination / "README.md")
     shutil.copy2(stage / "t6_inputs" / "LICENSE", destination / "LICENSE")
     shutil.copy2(log, destination / "build.log")
@@ -125,14 +329,19 @@ def package(stage, destination, log, toolchain):
         "soup_engine_base_commit": SOUP_BASE,
         "built_utc": datetime.now(timezone.utc).isoformat(),
         "toolchain": toolchain,
+        "build_identity": "T6-Cinema-source-build",
+        "build_identity_source_patch": "platform/Makefile (two checked identity recipes)",
         "stage": str(stage),
         "source_hashes": json.loads((stage / "t6_inputs" / "source-hashes.json").read_text()),
         "artifact_hashes": {},
+        "stock_file_map": stock_file_map,
         "limits": {"batch": 4, "preview_bytes": 12 * 1024 * 1024,
                    "output_bytes": 8 * 1024 * 1024, "deadline_seconds": 300},
         "source_cr2_access": "read only; no preview replacement or deletion",
-        "temporary_creation": "FIO_OpenFile O_WRONLY|O_CREAT|O_EXCL; no destructive fallback",
+        "temporary_creation": "FIO_OpenFile T6-specific 0x8501 create-new; no truncate or destructive fallback",
         "native_fio_validation": "exclusive-create and rename collision semantics hardware unverified",
+        "retro_ui": "native custom-menu renderer; checked pinned source gates; hardware untested",
+        "retro_ui_source_patches": ["src/gui-common.c", "src/menu.c"],
     }
     for path in sorted(destination.rglob("*")):
         if path.is_file():

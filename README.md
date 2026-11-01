@@ -3,7 +3,7 @@
 Experimental Canon **EOS Rebel T6 / EOS 1300D / Kiss X80, firmware 1.1.0**
 Magic Lantern integration with Soup film looks and anamorphic-inspired effects.
 
-**Status: built and host-tested; NOT tested on a physical camera.** The camera
+**Status: built, host-tested and tested in T6 emulation; NOT tested on a physical camera.** The camera
 prototype processes **still photographs**. Baked-in video effects and higher
 frame-rate recording are research goals, **not implemented features**. This is
 not a complete Magic Lantern installer or a production-ready firmware release.
@@ -11,6 +11,9 @@ not a complete Magic Lantern installer or a production-ready firmware release.
 ## What works in the prototype
 
 - Native **T6 Film** menu alongside the existing Magic Lantern menus.
+- An amber retro dashboard operated with the D-pad, main dial, SET, Q and DISP.
+  MENU exits; shutter, AV/erase, playback, LV and zoom retain native functions.
+  See the [control map and validation limits](docs/RETRO_UI.md).
 - Thirteen editable Soup film recipes, grain and halation.
 - Off / Subtle / Cinema / Strong effects, with blue or amber flares.
 - Highlight-driven multiscale horizontal streaks, anisotropic bloom, vignette
@@ -20,7 +23,8 @@ not a complete Magic Lantern installer or a production-ready firmware release.
   Automatic processing always starts OFF after boot.
 - Separate `T6F_####.JPG` outputs. Source CR2s and their embedded previews are
   opened read-only, never rewritten or deleted. Detected existing outputs are
-  refused; native DryOS exclusive-open and rename semantics need camera testing.
+  refused. The T6-specific creation mode and rename collisions were tested with
+  the actual firmware in emulation; physical storage still needs validation.
 - Half-resolution embedded-JPEG processing: the tested real T6 sample produces
   **2592 × 1728** JPEGs. This is not full sensor-RAW development.
 - A desktop reference using the same C renderer, plus optional center crop and
@@ -30,6 +34,11 @@ not a complete Magic Lantern installer or a production-ready firmware release.
 
 The demonstration is a generated test scene processed by the desktop reference.
 It is not evidence of physical-camera operation.
+
+![Retro dashboard in T6 firmware emulation](docs/images/retro-emulator.png)
+
+This is an emulator capture. See [emulator setup and limitations](integrations/qemu/README.md)
+and the [native file-I/O investigation](docs/NATIVE_FILE_IO.md).
 
 ## Video and high frame rates
 
@@ -85,8 +94,8 @@ python3 src/tools/build-t6.py --ml-source ../t6-ml \
 ```
 
 The script builds an isolated temporary source tree, preserving the upstream
-checkout. It generates `AUTOEXEC.BIN`, its matching `ML/modules/t6_110.sym`, film
-recipes, manifest and checksums. It never installs software, writes to a memory
+checkout. It generates `AUTOEXEC.BIN`, its matching `ML/modules/t6_110.sym`, bitmap
+fonts, film recipes, manifest and checksums. It never installs software, writes to a memory
 card, enables a boot flag or flashes a camera. No Canon ROMs are included.
 
 This is an **overlay for a matching, already-working 1300D.110 environment**,
@@ -107,6 +116,7 @@ make -C src -f Makefile.t6 arm
 python3 src/tools/fetch_t6_sample.py  # optional CC0 reference fixture
 make -C src/tools/t6_worker_test test
 make -C src/tools/t6_worker_test asan
+make -C src/tools/t6_worker_test retro retro-asan
 ```
 
 Tests cover effect behavior and memory limits, malformed CR2/JPEG/stock files,

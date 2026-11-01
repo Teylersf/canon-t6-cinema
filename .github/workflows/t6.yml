@@ -13,6 +13,9 @@ jobs:
       - name: Offline parser tests only
         shell: cmd
         run: tools\read-only-camera-info\build\t6-camera-info.exe --self-test
+      - name: Card preparation fixtures and AddressSanitizer only
+        shell: cmd
+        run: tools\t6-card-boot\build.cmd test-asan
   host-and-arm:
     runs-on: ubuntu-24.04
     steps:
@@ -23,6 +26,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends build-essential gcc-arm-none-eabi libnewlib-dev python3-pil python3-numpy
       - name: Host behavioral and malformed-input tests
         run: make -C src -f Makefile.t6 test
+      - name: Fetch hash-pinned public T6 fixture
+        run: python3 src/tools/fetch_t6_sample.py
+      - name: Native worker and retro control regressions
+        run: make -C src/tools/t6_worker_test test asan retro retro-asan
       - name: Sanitizers
         run: make -C src -f Makefile.t6 asan
       - name: Freestanding ARM effect build
@@ -33,4 +40,5 @@ jobs:
           git -C /tmp/t6-ml remote add origin https://github.com/reticulatedpines/magiclantern_simplified.git
           git -C /tmp/t6-ml fetch --depth 1 origin 142472e95054d73640f50789ac0fd66325499d82
           git -C /tmp/t6-ml checkout --detach FETCH_HEAD
+          python3 src/tools/t6_worker_test/menu_intent_test.py --ml-source /tmp/t6-ml --sanitize
           python3 src/tools/build-t6.py --ml-source /tmp/t6-ml --output /tmp/t6-camera-experiment

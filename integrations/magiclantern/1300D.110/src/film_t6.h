@@ -18,5 +18,6 @@ void film_t6_clear_cancel(void);
 void film_t6_snapshot(struct film_t6_settings *settings);
 void film_t6_load_stocks(void);
 void film_t6_set_status(const char *status);
+void film_t6_set_processing(int processing);
 
 #endif
