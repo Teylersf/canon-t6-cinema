@@ -36,6 +36,7 @@ STOCK_PACKAGE_NAMES = {
     "nostalgicneg.fs": "nostneg.fs",
 }
 YUV_INPUTS = ["yuv_anamorphic.c", "yuv_anamorphic.h"]
+HEVC_INPUTS = ["hevc_intra.c", "hevc_intra.h"]
 ML_RAM_START = 0xC80000
 ML_RAM_END = 0xD00000
 
@@ -255,6 +256,11 @@ def check_source(source):
     for name in YUV_INPUTS:
         if not (ROOT / "src" / "experimental" / "yuv_anamorphic" / name).is_file():
             fail("missing bounded YUV benchmark input: " + name)
+    for name in HEVC_INPUTS:
+        if not (ROOT / "src" / "experimental" / "hevc_intra" / name).is_file():
+            fail("missing bounded HEVC proof input: " + name)
+    if not (ROOT / "src" / "experimental" / "hevc_intra" / "THIRD_PARTY.md").is_file():
+        fail("missing HEVC third-party binary distribution notice")
     for name in FONT_FILES:
         if not (source / "data" / "fonts" / name).is_file():
             fail("missing pinned ML bitmap font: " + name)
@@ -297,10 +303,22 @@ def extract_source(source, stage):
             fail("unexpected duplicate YUV engine input: " + name)
         shutil.copy2(original, destination)
         hashes[original.relative_to(ROOT).as_posix()] = sha256(destination)
+    # Only the small freestanding encoder core enters the camera build.
+    # Host input adapters and external codec experiments remain separate.
+    for name in HEVC_INPUTS:
+        original = ROOT / "src" / "experimental" / "hevc_intra" / name
+        destination = stage / "soup_engine" / name
+        if destination.exists():
+            fail("unexpected duplicate HEVC engine input: " + name)
+        shutil.copy2(original, destination)
+        hashes[original.relative_to(ROOT).as_posix()] = sha256(destination)
     for name in FONT_FILES:
         hashes["data/fonts/" + name] = sha256(stage / "data" / "fonts" / name)
     shutil.copy2(Path(__file__), metadata / "build-t6.py")
     shutil.copy2(ROOT / "LICENSE", metadata / "LICENSE")
+    hevc_notice = ROOT / "src" / "experimental" / "hevc_intra" / "THIRD_PARTY.md"
+    shutil.copy2(hevc_notice, metadata / "HEVCLIC.TXT")
+    hashes[hevc_notice.relative_to(ROOT).as_posix()] = sha256(metadata / "HEVCLIC.TXT")
     hashes["src/tools/build-t6.py"] = sha256(metadata / "build-t6.py")
     hashes["LICENSE"] = sha256(metadata / "LICENSE")
     (metadata / "source-hashes.json").write_text(json.dumps(hashes, indent=2) + "\n")
@@ -371,6 +389,7 @@ def package(stage, destination, log, toolchain):
         shutil.copy2(source_font, fonts / name)
     shutil.copy2(stage / "t6_inputs" / "README.md", destination / "README.md")
     shutil.copy2(stage / "t6_inputs" / "LICENSE", destination / "LICENSE")
+    shutil.copy2(stage / "t6_inputs" / "HEVCLIC.TXT", destination / "HEVCLIC.TXT")
     shutil.copy2(log, destination / "build.log")
     manifest = {
         "camera": "Canon EOS Rebel T6 / EOS 1300D / Kiss X80",
@@ -396,6 +415,8 @@ def package(stage, destination, log, toolchain):
         "retro_ui_source_patches": ["src/gui-common.c", "src/menu.c"],
         "video_cpu_benchmark": "owned synthetic Os/uncached, Os/cached and O2/cached comparison with output checks; no encoder hook or recording-FPS result",
         "synthetic_cpu_report_version": 2,
+        "hevc_proof": "manual owned synthetic HEVC I_PCM; no live sensor capture or compression-performance claim",
+        "hevc_encoder_workspace_bytes": 5632,
     }
     for path in sorted(destination.rglob("*")):
         if path.is_file():

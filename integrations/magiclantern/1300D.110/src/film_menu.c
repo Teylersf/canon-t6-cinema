@@ -24,6 +24,9 @@
 static int film_auto;
 static volatile int film_request;
 static volatile int film_bench_request;
+static volatile int film_hevc_request;
+static unsigned film_hevc_requested_size;
+static int film_hevc_size; /* intentionally not persisted: boot default320x180 */
 static volatile int film_cancel;
 static volatile int film_processing;
 extern int ml_started;
@@ -67,6 +70,18 @@ int film_t6_take_bench_request(void)
     film_bench_request = 0;
     film_auto = 0;
     film_request = 0;
+    film_hevc_request = 0;
+    return 1;
+}
+int film_t6_hevc_pending(void) { return film_hevc_request != 0; }
+int film_t6_take_hevc_request(unsigned *size_choice)
+{
+    if (!film_hevc_request || !size_choice) return 0;
+    *size_choice = film_hevc_requested_size;
+    film_hevc_request = 0;
+    film_auto = 0;
+    film_request = 0;
+    film_bench_request = 0;
     return 1;
 }
 
@@ -144,9 +159,11 @@ int film_retro_event_gate(struct event *event)
     if (actions & FILM_RETRO_CHANGED) {
         film_stock = p.stock; film_effect = p.effect; film_amber = p.amber; film_auto = p.auto_on;
     }
-    if ((actions & FILM_RETRO_DEVELOP) && !film_processing) { film_cancel = 0; film_request = 1; }
+    if ((actions & FILM_RETRO_DEVELOP) && !film_processing) {
+        film_cancel = 0; film_request = 1; film_bench_request = 0; film_hevc_request = 0;
+    }
     if (actions & FILM_RETRO_CANCEL) {
-        film_auto = 0; film_request = 0; film_bench_request = 0; film_cancel = 1;
+        film_auto = 0; film_request = 0; film_bench_request = 0; film_hevc_request = 0; film_cancel = 1;
     }
     /* Native handle_ml_menu_keys owns the half-press close signal. Canon can
      * update the half-press state and send other notifications before that
@@ -309,6 +326,8 @@ static MENU_SELECT_FUNC(film_develop_latest)
 {
     (void)priv; (void)delta;
     if (film_processing) return; /* Do not undo cancellation of an active job. */
+    film_hevc_request = 0;
+    film_bench_request = 0;
     film_cancel = 0;
     film_request = 1; /* Coalesces repeated button presses; no unbounded queue. */
 }
@@ -319,6 +338,7 @@ static MENU_SELECT_FUNC(film_stop)
     film_auto = 0;
     film_request = 0;
     film_bench_request = 0;
+    film_hevc_request = 0;
     film_cancel = 1;
 }
 
@@ -328,9 +348,32 @@ static MENU_SELECT_FUNC(film_cpu_limits)
     if (film_processing) return;
     film_auto = 0;
     film_request = 0;
+    film_hevc_request = 0;
     film_cancel = 0;
     film_bench_request = 1; /* One pending run; repeated presses coalesce. */
     film_t6_set_status("CPU test queued; Auto OFF");
+}
+
+static MENU_SELECT_FUNC(film_generate_hevc)
+{
+    (void)priv; (void)delta;
+    if (film_processing) return;
+    if (ml_shutdown_requested || lens_info.job_state || get_halfshutter_pressed() ||
+        lv || is_movie_mode() || RECORDING) {
+        film_t6_set_status("HEVC proof: leave LV/movie/capture");
+        return;
+    }
+    if (film_hevc_size < 0 || film_hevc_size > 2) {
+        film_t6_set_status("HEVC proof: invalid synthetic size");
+        return;
+    }
+    film_auto = 0;
+    film_request = 0;
+    film_bench_request = 0;
+    film_cancel = 0;
+    film_hevc_requested_size = (unsigned)film_hevc_size;
+    film_hevc_request = 1; /* Repeated presses replace one pending size snapshot. */
+    film_t6_set_status("HEVC SYNTHETIC queued; Auto OFF");
 }
 
 static MENU_UPDATE_FUNC(film_status_update)
@@ -384,6 +427,17 @@ static struct menu_entry film_menu[] = {
         .name = "CPU limits test", .select = film_cpu_limits,
         .help = "Bounded offscreen test; Auto OFF. Waits for idle, outside LV/movie.",
         .help2 = "Cancel / stop auto stops the test. No clocks or sensor changes.",
+    },
+    {
+        .name = "HEVC proof size", .priv = &film_hevc_size, .max = 2,
+        .choices = CHOICES("320x180", "3840x2160", "7680x4320"),
+        .help = "SYNTHETIC ONLY: generated pixels, two frames. Default 320x180.",
+        .help2 = "4K/8K writes large test files; no camera capture or recording.",
+    },
+    {
+        .name = "Generate HEVC proof", .select = film_generate_hevc,
+        .help = "SYNTHETIC ONLY: two generated frames to a new HVCT file. Auto OFF.",
+        .help2 = "Outside LV/movie/capture. Stop cancels; cooperative 30s/128MiB.",
     },
 };
 

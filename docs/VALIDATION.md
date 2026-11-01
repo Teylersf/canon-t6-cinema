@@ -20,6 +20,9 @@ T6 with firmware 1.1.0; its private ROM1 dump matches the camera checksum.
   decode completely with audio: 349 frames at 1080p29.97 and 800 at 720p59.94,
   with constant expected PTS spacing. See the [physical baseline](HARDWARE_BASELINE.md)
   for raw timings and limits. This is no saved-effect or higher-sensor-FPS proof.
+- The subsequent r13 comparison physically saved a valid deadline-partial CSV
+  with 26 timed samples, nine warmups and 23 matching output checks. The earlier
+  report remained byte-for-byte unchanged. Its missing final timing is explicit.
 - Shared streaming anamorphic effect tests pass strict compilation, AddressSanitizer
   and UndefinedBehaviorSanitizer with recovery disabled.
 - CR2/JPEG malformed-input regression tests pass, including real T6 preview
@@ -81,11 +84,30 @@ T6 with firmware 1.1.0; its private ROM1 dump matches the camera checksum.
   `[0xC80000,0xD00000)`. The r12 image uses 462,848 bytes; the r13 comparison
   image uses 468,736 bytes and leaves 55,552 bytes in that reserve. Heap
   allocations and task stacks are separate.
+  The r14 HEVC image uses 477,184 bytes and leaves 47,104 bytes.
 - The isolated symbolic video observer passes strict host tests, ASan/UBSan
   and freestanding ARM946E-S compilation. Tests cover storage boundaries,
   fixed field IDs, paired changes/failures, clock wrap, guard precedence,
   deadlines and late ticks without catch-up. It is excluded from camera
   builds and has no native address map or hardware observation result.
+- The new small C HEVC encoder passes strict, ASan/UBSan and freestanding ARM
+  checks. Independent FFmpeg decoding recovers exact pixels from synthetic 4K
+  and 8K streams, including padding/cropping and zero-heavy escaping. It uses a
+  5,632-byte workspace with no heap or unresolved ARM runtime symbols.
+- A separate full-scale CR2/JPEG frontend streams a genuine 4K crop with optional
+  Strong/Blue effects using bounded memory. Its source-preservation, color-vector
+  and malformed-input tests pass sanitizers. Custom HEVC encoding and independent
+  decoding preserve all 12,441,600 YUV bytes. Optional VUI metadata identifies
+  BT.601 limited range and centered chroma; no capture FPS is declared.
+- The camera HEVC publisher is tested on the host with the actual encoder,
+  independent decoded sample/CRC checks and guarded cancellation, deadline,
+  allocation, read/write, collision and pre/post-publication faults. This
+  synthetic-only proof does not establish live high-resolution capture.
+  The native r14 ARM image also generated and verified two 320×180 frames and
+  two 3840×2160 frames in emulation; independent export, CRC and FFmpeg decode
+  recovered every visible pixel. The 8K attempt reached the cooperative budget
+  after one frame and removed its owned TMP without publishing an HVC. The VM
+  quit normally. These emulator durations are not physical throughput results.
 
 The initial reference produces 2592×1728 output from a real 1300D embedded JPEG.
 No desktop timing is presented as a T6 processing-speed measurement.

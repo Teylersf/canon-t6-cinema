@@ -11,6 +11,7 @@
 #include "native_format.h"
 #define CHECK(c) do {if(!(c)){fprintf(stderr,"retro FAIL %d: %s\n",__LINE__,#c);exit(1);}}while(0)
 int ml_started=1,ml_shutdown_requested,mock_display_on=1,lv,shooting_mode;
+int __recording,__recording_custom;
 struct mock_lens_info lens_info;
 static int menu_on=1,tab_on=1,entry_on=1,movie,half,stops,draws,acks,av_reads,av_status;
 static int end_poll;
@@ -39,7 +40,8 @@ int bmp_printf(uint32_t font,int x,int y,const char *fmt,...){char b[128];va_lis
 static void reset(void){
  memset(&retro,0,sizeof retro);retro_handoff_event=NULL;retro_av_handoff=0;
  menu_on=tab_on=entry_on=mock_display_on=1;movie=half=lv=ml_shutdown_requested=0;
- lens_info.job_state=0;film_auto=film_request=film_bench_request=film_cancel=film_processing=0;
+ lens_info.job_state=0;film_auto=film_request=film_bench_request=film_hevc_request=film_cancel=film_processing=0;
+ film_hevc_size=0;film_hevc_requested_size=0;__recording=__recording_custom=0;
  film_count=3;film_stock=0;film_effect=0;film_amber=0;
  snprintf(film_names[0],32,"PORTRA");snprintf(film_names[1],32,"SOUP 800");
  stops=draws=acks=av_reads=end_poll=0;
@@ -77,14 +79,49 @@ static void pure_state_tests(void){
  film_retro_step(&s,&p,FILM_KEY_SET,1,1,&a);CHECK((a&FILM_RETRO_CANCEL)&&!p.auto_on);
  CHECK(film_retro_step(&s,&p,FILM_KEY_SYSTEM,1,0,&a)==1&&s.visible&&!a);
 }
+static void hevc_queue_tests(void){
+ unsigned size;int context;
+ reset();CHECK(film_hevc_size==0&&!film_t6_hevc_pending());
+ CHECK(strstr(film_menu[9].help,"SYNTHETIC ONLY")&&strstr(film_menu[10].help,"SYNTHETIC ONLY"));
+ film_auto=film_request=film_bench_request=film_cancel=1;film_generate_hevc(NULL,1);
+ CHECK(film_t6_hevc_pending()&&!film_auto&&!film_request&&!film_bench_request&&!film_cancel);
+ film_hevc_size=2;CHECK(!film_t6_take_hevc_request(NULL)&&film_t6_hevc_pending());
+ CHECK(film_t6_take_hevc_request(&size)&&size==0&&!film_t6_hevc_pending());
+ film_generate_hevc(NULL,1);film_hevc_size=1;film_generate_hevc(NULL,1);
+ film_cancel=1;CHECK(film_t6_take_hevc_request(&size)&&size==1&&film_cancel);
+ CHECK(!film_t6_take_hevc_request(&size));
+ film_cancel=0;film_generate_hevc(NULL,1);film_stop(NULL,1);
+ CHECK(!film_t6_hevc_pending()&&film_cancel&&!film_auto&&!film_request&&!film_bench_request);
+ film_generate_hevc(NULL,1);film_cpu_limits(NULL,1);CHECK(!film_t6_hevc_pending()&&film_bench_request);
+ film_generate_hevc(NULL,1);film_develop_latest(NULL,1);CHECK(!film_t6_hevc_pending()&&!film_bench_request&&film_request);
+ for(context=0;context<8;context++){
+  reset();film_cancel=1;
+  if(context==0)film_processing=1;
+  if(context==1)lens_info.job_state=1;
+  if(context==2)half=1;
+  if(context==3)lv=1;
+  if(context==4)movie=1;
+  if(context==5)ml_shutdown_requested=1;
+  if(context==6)__recording=2;
+  if(context==7)__recording_custom=1;
+  film_generate_hevc(NULL,1);CHECK(!film_t6_hevc_pending()&&film_cancel);
+ }
+ reset();film_hevc_size=-1;film_generate_hevc(NULL,1);CHECK(!film_t6_hevc_pending());
+ film_hevc_size=3;film_generate_hevc(NULL,1);CHECK(!film_t6_hevc_pending());
+ reset();film_generate_hevc(NULL,1);film_processing=film_cancel=1;
+ film_generate_hevc(NULL,1);CHECK(film_hevc_request&&film_cancel);film_stop(NULL,1);CHECK(!film_hevc_request&&film_cancel);
+ reset();
+}
 int main(void){
  int i;struct event e;char val[35];struct menu_display_info info={val,1,0};
  const int presses[]={BGMT_PRESS_UP,BGMT_PRESS_DOWN,BGMT_PRESS_LEFT,BGMT_PRESS_RIGHT,BGMT_PRESS_SET,BGMT_PRESS_DISP};
  const int releases[]={BGMT_UNPRESS_UP,BGMT_UNPRESS_DOWN,BGMT_UNPRESS_LEFT,BGMT_UNPRESS_RIGHT,BGMT_UNPRESS_SET,BGMT_UNPRESS_DISP};
  const int native[]={BGMT_PLAY,BGMT_LV,BGMT_ISO,BGMT_PRESS_ZOOM_IN,BGMT_UNPRESS_ZOOM_IN,BGMT_PRESS_ZOOM_OUT,BGMT_UNPRESS_ZOOM_OUT,BGMT_PRESS_HALFSHUTTER,BGMT_UNPRESS_HALFSHUTTER,BGMT_PRESS_FULLSHUTTER,BGMT_UNPRESS_FULLSHUTTER};
  pure_state_tests();reset();CHECK(film_retro_event_gate(NULL)==1);
- CHECK(COUNT(film_menu)==9&&!strcmp(film_menu[7].name,"Retro dashboard")&&
-       !strcmp(film_menu[8].name,"CPU limits test"));
+ CHECK(COUNT(film_menu)==11&&!strcmp(film_menu[7].name,"Retro dashboard")&&
+       !strcmp(film_menu[8].name,"CPU limits test")&&!strcmp(film_menu[9].name,"HEVC proof size")&&
+       !strcmp(film_menu[10].name,"Generate HEVC proof"));
+ hevc_queue_tests();
  /* CPU action coalesces one request, disables Auto and drops Develop.
   * Busy presses cannot clear an active cancellation or queue another run. */
  film_auto=film_request=film_cancel=1;film_cpu_limits(NULL,1);

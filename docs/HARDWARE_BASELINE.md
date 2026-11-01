@@ -40,7 +40,29 @@ include scheduling delays, and three samples are not a sustained worst-case
 bound. This build uses the size-optimized kernel and uncached pixels/scratch;
 these results are not a maximum CPU capability or recording-FPS measurement.
 The current path exceeds a 29.97/59.94 fps frame interval even at the smallest
-tested size. Cache and compiler effects require separate physical comparisons.
+tested size. Cache and compiler effects required the separate comparison below.
+
+### Physical r13 cached/compiler comparison
+
+The subsequent version-2 report reached its cooperative deadline at 10,012 ms
+and saved valid partial results. Both allocation classes validated. It retained
+26 timed calls, nine warmups and 23 successful full-frame byte comparisons.
+The final optimized/cached case has two timed samples; its third is explicitly
+missing. The earlier version-1 CSV remained byte-for-byte unchanged.
+
+| Synthetic frame | Size-optimized, uncached (ms) | Size-optimized, cached (ms) | `-O2`, cached (ms) |
+| --- | --- | --- | --- |
+| 320×180 | 121, 89, 122 | 45, 45, 45 | 38, 39, 39 |
+| 640×360 | 389, 389, 389 | 181, 180, 181 | 187, 187, 187 |
+| 640×480 | 509, 509, 507 | 241, 273, 241 | 237, 238, missing |
+
+Cached access substantially reduced this workload's elapsed time. `-O2` did
+not improve every case, and these few samples do not establish sustained
+worst-case timing. Every retained candidate output had its matching byte check;
+the global comparison-complete flag correctly remains zero because the last
+requested call did not run. These are synthetic kernel timings with no encoder,
+sensor or recording-FPS measurement. A cached pointer is not a demonstrated
+ownership/cache-handoff policy for Canon's DMA buffers.
 
 ## Earlier read-only USB identity check
 

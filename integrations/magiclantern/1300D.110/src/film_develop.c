@@ -11,6 +11,7 @@
 #include "notify_box.h"
 #include "film_t6.h"
 #include "film_cpu_bench.h"
+#include "film_hevc.h"
 #include "se.h"
 #include "cr2.h"
 #include "stock.h"
@@ -323,6 +324,19 @@ static void film_worker(void *unused)
     msleep(1000);
     film_t6_load_stocks();
     while (!ml_shutdown_requested) {
+        if (film_t6_hevc_pending()) {
+            unsigned size_choice;
+            if (film_t6_take_hevc_request(&size_choice)) {
+                /* Stop after claim must survive: only the queue action clears
+                 * stale cancellation. The proof rechecks capture/mode guards. */
+                film_t6_set_processing(1);
+                film_hevc_generate(size_choice);
+                film_t6_set_processing(0);
+                previous_auto = 0;
+            }
+            msleep(500);
+            continue;
+        }
         struct card_info *card = get_shooting_card();
         char directory[FILM_T6_PATH], prefix[8];
         int automatic = film_t6_auto_enabled();

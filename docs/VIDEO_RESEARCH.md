@@ -4,9 +4,10 @@ Research target: EOS Rebel T6 / EOS 1300D / Kiss X80, Canon firmware 1.1.0.
 Magic Lantern source pinned at `142472e95054d73640f50789ac0fd66325499d82`.
 Assessment date: 2026-11-01, America/Los_Angeles.
 
-The experimental T6 Cinema artifact develops still-photo JPEG previews only.
-It does not apply advanced effects to a saved movie. Its worker waits in movie
-mode and does not add movie-encoder hooks or sensor-mode changes. Successful
+The experimental T6 Cinema artifact develops still-photo JPEG previews and
+adds a manual synthetic HEVC codec proof. It does not apply advanced effects
+to a saved sensor movie. Its worker waits in movie mode and does not add
+movie-encoder hooks or sensor-mode changes. Successful
 ARM compilation and desktop fault tests do not establish physical-camera boot
 or movie-recording reliability.
 
@@ -19,6 +20,32 @@ The size-optimized, uncached Strong/Blue kernel takes median 89, 388 and 510 ms
 on owned 320×180, 640×360 and 640×480 frames respectively. This path is too slow
 for real-time processing at those video rates. It is not a bound on cached or
 optimized implementations. See [physical results](HARDWARE_BASELINE.md).
+The subsequent r13 comparison measured cached medians of 45/181/241 ms for the
+size-optimized kernel and 39/187/237.5 ms for `-O2` (the last has two samples).
+It saved a valid deadline-partial report with 23 matching output checks.
+
+## New custom software HEVC path
+
+The [new C99 I_PCM encoder](../src/experimental/hevc_intra/README.md) has
+produced real 3840×2160 and 7680×4320 synthetic HEVC streams. FFmpeg decoded
+them without errors and recovered every visible YUV byte exactly. The core
+uses a 5,632-byte workspace, no heap, no OS services and no camera addresses.
+I_PCM avoids motion search/transforms by carrying sample bytes directly;
+one synthetic 8K frame is about 49.8 MB. This is a bounded encoding experiment,
+not a demonstrated compressed bitrate, sensor mode or processing speed.
+
+The [full-scale still frontend](../src/experimental/hevc_frame_source/README.md)
+also streams a 4K crop from the T6's 5184×3456 embedded JPEG, with optional
+Strong/Blue effects, into planar 4:2:0. Encoding and independently decoding
+that captured-detail input recovers all 12,441,600 YUV bytes. The optional HEVC
+color metadata matches its BT.601 limited-range, centered-chroma conversion.
+This is host still-derived processing; the native proof starts with generated
+pixels. Neither establishes a live 4K capture path or genuine 8K source detail.
+
+The separate [Kvazaar experiment](../src/experimental/hevc_kvazaar/README.md)
+produces compressed HEVC on the host, but its ARM audit is not a native port:
+it retains POSIX/math dependencies and a function stack frame larger than the
+current film worker's stack. It is not linked into the camera artifact.
 
 ## The existing display interface is not an encoder interface
 

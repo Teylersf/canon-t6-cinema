@@ -10,7 +10,8 @@ Kiss X80 with Canon firmware **1.1.0 only**. T6i/750D, T5/1200D and firmware
 This adds a **T6 Film** page to Magic Lantern's existing menus. It retains the
 pinned upstream 1300D platform, entry points and original limited features.
 There are no borrowed 5D/50D ROM addresses, sensor-mode changes, RAW video unlocks,
-or live video effects. The optional Retro dashboard uses native custom-menu
+or live sensor-video effects. A separate manual HEVC proof generates synthetic
+pixels only. The optional Retro dashboard uses native custom-menu
 drawing and checked source-level button gates in the pinned ML event chain;
 it adds no binary GUI-hook patch or new firmware address. It remains hardware
 untested. See the repository's `docs/RETRO_UI.md` for controls and verification.
@@ -54,6 +55,12 @@ from the embedded preview; use a color Picture Style for color stocks.
   memory. Both copies use the same source. The original object's flags stay
   unchanged; only the renamed comparison object receives the trailing `-O2`.
   No camera image buffers, encoder hooks or sensor timers are accessed.
+- **HEVC proof size:** 320×180, 3840×2160 or 7680×4320; resets to 320×180 at boot.
+- **Generate HEVC proof:** writes exactly two generated test frames through the
+  new C HEVC I_PCM encoder. The menu and help label these **SYNTHETIC ONLY**.
+  This starts no sensor capture or movie recording. It disables Auto and clears
+  queued photo/CPU work; selecting another job type replaces a queued proof.
+  Stop cancels all pending work. Existing Retro and CPU menu positions remain.
 
 Successful photo status includes elapsed seconds and milliseconds for the whole
 job, including stabilization, processing, cleanup and I/O. This is wall time,
@@ -82,8 +89,38 @@ an exclusively created temporary, byte readback, and guarded rename; existing
 reports and other files are preserved. The CSV marks these as synthetic kernel
 timings. They establish no recording FPS, encoder format or DMA/cache ownership.
 The owner's earlier r12 version-1 uncached timings and short recording baselines
-are documented in `docs/HARDWARE_BASELINE.md`; physical comparison results for
-the newer version-2 diagnostic are still pending.
+and r13 version-2 physical comparison are documented in `docs/HARDWARE_BASELINE.md`.
+The latter saved a valid deadline-partial report with 26 timed calls and 23
+matching output checks. Cached access reduced time, while `-O2` did not improve
+every size. None of these measurements is a recording-FPS result.
+
+## Manual HEVC codec proof
+
+The proof uses a cached, owned 5,632-byte encoder workspace and streams output
+without allocating a full frame. A 30-second cooperative budget, 128 MiB output
+cap and camera/cancel guards apply at CTU, write, readback and publication
+boundaries. A callback already running cannot be preempted. It runs only while
+idle outside capture, half-shutter, Live View, movie mode and recording.
+
+New files use `ML/FILM/HVCT0001.TMP` → `HVCT0001.HVC`, through slot 0016. Native
+0x8501 create-new semantics, no destructive fallback, streamed CRC32/length
+verification and guarded rename follow the existing publication protocol.
+The encoder workspace is freed before allocating the checked 4 KiB uncached
+readback buffer. Only a TMP created by this run may be removed. After rename,
+an interruption or verification failure retains the HVC and path but does not
+report it as verified. Existing files, photos, CPU reports and settings are not
+outputs of this operation.
+
+The `.HVC` files are Annex-B HEVC streams, not Canon MOVs. They have no audio or
+declared capture FPS, and Canon playback is not established. I_PCM carries raw
+samples, producing roughly 25 MB for two 4K frames or 100 MB for two 8K frames.
+Successful generation/decoding proves the codec/file path for generated pixels;
+it does not prove 4K sensor readout, 8K captured detail or real-time recording.
+The separate host still-image frontend can use genuine 4K crops from the
+full-size CR2 JPEG. Native image-source integration remains separate work.
+
+The package includes `HEVCLIC.TXT` with the BSD notice for its normative CABAC
+table data. The experimental encoder's original code is GPL-2.0-only.
 
 Output beside `IMG_1234.CR2`: `T6F_1234.JPG`, via a new `T6F_1234.TMP`.
 The worker refuses detected existing output or temporary files. It requests

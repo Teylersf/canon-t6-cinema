@@ -33,6 +33,11 @@ not a complete Magic Lantern installer or a production-ready firmware release.
   refused. The T6-specific creation mode and rename collisions were tested with
   the actual firmware in emulation. Physical new-file creation works; collision
   preservation still needs physical validation.
+- A manual **HEVC codec proof** generates two synthetic frames at 320×180,
+  3840×2160 or 7680×4320 using a new small C encoder. It writes a new `.HVC`
+  test file; this is not a sensor recording mode. The default size resets to
+  320×180 at boot. Native emulation generated and decoded the 320×180 and 4K
+  files; physical-camera proof is pending. See [HEVC experiments](#custom-hevc-experiments).
 - Half-resolution embedded-JPEG processing: the tested real T6 sample produces
   **2592 × 1728** JPEGs. This is not full sensor-RAW development.
 - A desktop reference using the same C renderer, plus optional center crop and
@@ -50,9 +55,10 @@ and the [native file-I/O investigation](docs/NATIVE_FILE_IO.md).
 
 ## Video and high frame rates
 
-The prototype leaves Canon's recording pipeline unchanged and stops the still
-worker in movie mode. It **does not bake these spatial effects into recorded
-video**, apply a live video filter, enable RAW video, or increase frame rates.
+The prototype leaves Canon's MOV recording pipeline unchanged and stops the
+still worker in movie mode. It **does not bake these spatial effects into live
+sensor video**, apply a live video filter, enable RAW video, or increase capture
+frame rates. The separate HEVC proof creates generated test pixels only.
 
 Canon specifies **1920 × 1080 up to 29.97 fps**, **1280 × 720 up to 59.94 fps**,
 and **640 × 480 at 29.97 fps** in NTSC mode. Lower resolution alone does not
@@ -77,6 +83,28 @@ The [read-only Windows camera-info tool](tools/read-only-camera-info/README.md)
 confirmed the connected T6's firmware as **1.1.0** using standard PTP DeviceInfo.
 See the [sanitized hardware baseline](docs/HARDWARE_BASELINE.md). This USB check
 did not boot the overlay or validate video effects or higher frame rates.
+
+## Custom HEVC experiments
+
+The new [bounded C99 HEVC core](src/experimental/hevc_intra/README.md) emits
+real Annex-B HEVC using I_PCM samples. Independent FFmpeg decoding recovers
+every input pixel in tested 4K and 8K synthetic streams. It has no heap or OS
+dependencies and needs a 5,632-byte workspace. I_PCM carries raw samples and
+produces large files; it is not an efficient compressed-video implementation.
+The camera proof uses owned synthetic inputs and does not establish optical
+8K capture, live 4K readout, recording speed or Canon playback compatibility.
+
+A separate [streaming still-image frontend](src/experimental/hevc_frame_source/README.md)
+uses the full 5184×3456 JPEG embedded in a T6 CR2 to make a genuine 3840×2160
+crop, optionally with the shared Strong/Blue effect. The custom encoder's
+decoded output matches that 4K input exactly. This host path demonstrates
+captured-detail 4K plus baked effects in HEVC; native still-sequence and live
+capture integration remain separate work. It does not upscale to 8K.
+
+The [Kvazaar harness](src/experimental/hevc_kvazaar/README.md) also explores a
+compressed software encoder with explicit host allocation/output budgets.
+Its ARM compile audit exposes substantial stack/runtime requirements; it is
+excluded from the camera image. No desktop timings are camera FPS results.
 
 ## Build and try the renderer on a computer
 

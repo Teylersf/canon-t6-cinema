@@ -30,6 +30,8 @@ static int half_pressed, movie_mode, manual_request, bench_request, processing;
 static int bench_calls, bench_return, bench_cancel, worker_stop_on_sleep;
 static int processing_entries, processing_exits, no_card;
 static int bench_cancel_after_claim;
+static int hevc_request, hevc_calls, hevc_return, hevc_cancel_after_claim;
+static unsigned hevc_size;
 static unsigned write_delay_ms;
 static char status[80];
 int ml_started = 1, ml_shutdown_requested;
@@ -84,6 +86,8 @@ static void reset(void)
     bench_calls = bench_return = bench_cancel = worker_stop_on_sleep = 0;
     processing_entries = processing_exits = no_card = lv = 0;
     bench_cancel_after_claim = 0;
+    hevc_request = hevc_calls = hevc_return = hevc_cancel_after_claim = 0;
+    hevc_size = 0;
     write_delay_ms = 0;
     ml_shutdown_requested = 0; status[0] = 0;
 }
@@ -217,6 +221,15 @@ int film_t6_take_bench_request(void)
     return 1;
 }
 int film_t6_cancelled(void) { return cancel_now || ml_shutdown_requested; }
+int film_t6_hevc_pending(void) { return hevc_request; }
+int film_t6_take_hevc_request(unsigned *size)
+{
+    if (!hevc_request || !size) return 0;
+    *size = hevc_size;
+    hevc_request = auto_on = manual_request = bench_request = 0;
+    if (hevc_cancel_after_claim) cancel_now = 1;
+    return 1;
+}
 void film_t6_clear_cancel(void) { cancel_now = 0; }
 void film_t6_snapshot(struct film_t6_settings *s) { snprintf(s->stock, sizeof(s->stock), "portra.fs"); s->effect = 2; s->amber = 0; }
 void film_t6_load_stocks(void) {}
@@ -241,6 +254,15 @@ int film_cpu_bench(void)
     if (bench_cancel) cancel_now = 1;
     snprintf(status, sizeof(status), "%s", bench_return ? "CPU test stopped" : "CPU test saved");
     return bench_return;
+}
+int film_hevc_generate(unsigned size)
+{
+    CHECK(processing && !auto_on && !manual_request && !bench_request && !hevc_request);
+    CHECK(size == hevc_size && !writes && !creates && !source_ops);
+    hevc_calls++;
+    if (cancel_now) CHECK(hevc_cancel_after_claim);
+    snprintf(status, sizeof(status), "%s", cancel_now || hevc_return ? "HEVC proof stopped" : "HEVC proof saved");
+    return hevc_return;
 }
 
 #define snprintf t6_mock_snprintf
@@ -320,6 +342,24 @@ int main(int argc, char **argv)
                 !processing && !writes && !creates && !source_ops);
       }
     }
+    reset();
+    { int result;
+      for (result = -1; result <= 1; result++) {
+          reset(); hevc_size = (unsigned)(result + 1);
+          auto_on = manual_request = bench_request = hevc_request = 1;
+          hevc_return = result; worker_stop_on_sleep = no_card = 1;
+          film_worker(NULL);
+          CHECK(hevc_calls == 1 && !hevc_request && !bench_calls && !bench_request &&
+                !manual_request && !auto_on && !processing && processing_entries == 1 &&
+                processing_exits == 1 && !writes && !creates && !source_ops && !renames);
+      }
+    }
+    reset(); hevc_request = hevc_cancel_after_claim = worker_stop_on_sleep = 1;
+    film_worker(NULL);
+    CHECK(hevc_calls == 1 && cancel_now && !processing && !writes && !creates &&
+          !strcmp(status, "HEVC proof stopped"));
+    reset(); ml_shutdown_requested = hevc_request = 1; film_worker(NULL);
+    CHECK(hevc_request && !hevc_calls && !processing_entries);
     reset();
     CHECK((O_WRONLY | O_CREAT | O_EXCL) == 0xc1u); /* upstream macros unchanged */
     CHECK(!FIO_OpenFile(TEMP, 0xc1u) && !find(TEMP) && !creates);
