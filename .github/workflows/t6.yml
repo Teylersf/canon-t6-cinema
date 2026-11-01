@@ -36,6 +36,8 @@ jobs:
         run: make -C src -f Makefile.t6 arm
       - name: Experimental packed-YUV contracts and ARM build
         run: make -C src/experimental/yuv_anamorphic test asan arm
+      - name: Isolated video observer contracts and ARM build
+        run: make -C src/experimental/t6_video_probe test asan arm
       - name: Native synthetic CPU benchmark regressions
         run: make -C src/tools/t6_cpu_bench_test test asan
       - name: Static firmware RAM bound

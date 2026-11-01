@@ -2,13 +2,19 @@
 
 Research target: EOS Rebel T6 / EOS 1300D / Kiss X80, Canon firmware 1.1.0.
 Magic Lantern source pinned at `142472e95054d73640f50789ac0fd66325499d82`.
-Assessment date: 2026-10-31, America/Los_Angeles.
+Assessment date: 2026-11-01, America/Los_Angeles.
 
 The experimental T6 Cinema artifact develops still-photo JPEG previews only.
 It does not apply advanced effects to a saved movie. Its worker waits in movie
 mode and does not add movie-encoder hooks or sensor-mode changes. Successful
 ARM compilation and desktop fault tests do not establish physical-camera boot
 or movie-recording reliability.
+
+The owner's camera now boots the overlay and has produced two independently
+decoded still JPEGs. The latest matches the desktop render's image codestream.
+The diagnostic r12 package is on the owner's card; physical synthetic CPU
+measurements and an unchanged stock 720p60 MOV are pending. Neither the physical
+photo result nor the emulator's benchmark durations establish video throughput.
 
 ## The existing display interface is not an encoder interface
 
@@ -76,7 +82,7 @@ The recorder forwards that input through the H.264 request path to EDMAC read
 setup and start. These are verified code paths; their execution order and
 buffer identity during a recording have not yet been observed here.
 
-The next probe is an emulator-only, bounded execution-breakpoint trace:
+The emulator probe was designed as a bounded execution-breakpoint trace:
 
 1. Start with the normal Canon 720p recording mode. Record the producer's write
    destination and existing write-completion callback, the encode controller's
@@ -118,7 +124,25 @@ isolated VM was closed normally. This identifies a movie-startup blocker in
 this emulator setup; it does not demonstrate a physical-camera power fault or
 a usable encoder boundary. The ROM reconstruction, unvalidated ROM0 and
 synthetic-completion limitations above still apply. The next useful evidence
-is a successful physical-camera boot and unchanged baseline MOV recording.
+is an unchanged physical-camera baseline MOV recording and the pending CPU
+report; the physical boot and manual still-processing checks have since passed.
+
+## Isolated observation core for further physical research
+
+The [fixed-field observer](../src/experimental/t6_video_probe/README.md) is a
+portable state machine with seven symbolic fields, caller-owned record storage,
+paired reads, timestamps and change/failure masks. It starts OFF, requires an
+explicit arm, waits at most 120 seconds and samples for at most five seconds or
+512 records. Requested sample starts are at least five milliseconds apart;
+late ticks do not catch up. Callbacks already running cannot be preempted.
+
+It contains no native addresses, camera bridge, pixel reads, hooks, file I/O,
+recording request or camera-build integration. A future bridge must separately
+verify its exact fixed low-RAM whitelist and guards. The core treats observed
+pointer words as values and never follows them. Equal paired values do not
+establish an atomic snapshot, producer readiness, buffer ownership, cache
+coherency, an insertion deadline or frame rate. Host tests and ARM compilation
+validate this narrower observation contract only.
 
 ## Required evidence before a camera video implementation
 

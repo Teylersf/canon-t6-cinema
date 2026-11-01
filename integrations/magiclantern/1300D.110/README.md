@@ -80,8 +80,9 @@ TMP created after the final existence check with EEXIST (17), and rejected a
 destination created immediately before native rename with return -1. Both
 collisions preserved all eight pre-existing bytes. See the repository's
 `docs/NATIVE_FILE_IO.md`. These native paths are emulator-tested and
-**physical-camera untested**; publication is not claimed to be universally
-atomic, nor do emulator results establish real-card behavior or responsiveness.
+**physical collision preservation remains untested**. Physical new-file
+creation produced two valid JPEGs; publication is not claimed to be universally
+atomic, nor do emulator results establish sustained real-card responsiveness.
 Failed frames remain unchanged and may be retried with Develop latest.
 Source file size must be stable for 600 ms. The worker waits while Canon reports
 a capture job, the shutter is half-pressed, or movie mode is selected; a new

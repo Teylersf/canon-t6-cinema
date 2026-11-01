@@ -64,6 +64,9 @@ An isolated [packed-YUV processing prototype](src/experimental/yuv_anamorphic/RE
 uses integer highlight streaks and row scratch. The diagnostic build links it
 only for owned synthetic benchmark frames. There is no encoder-frame hook, and
 the T6 recording format, buffer ownership and effect throughput remain unverified.
+An isolated [fixed-field observer](src/experimental/t6_video_probe/README.md)
+provides bounded, timestamped observations through symbolic callbacks. It has
+no native address map or camera integration and is excluded from camera builds.
 
 The [read-only Windows camera-info tool](tools/read-only-camera-info/README.md)
 confirmed the connected T6's firmware as **1.1.0** using standard PTP DeviceInfo.
@@ -136,7 +139,7 @@ exclusive desktop outputs, original-file preservation and the actual camera
 worker behind mocked Canon I/O. Worker fault injection covers cancellation,
 capture becoming busy, short/failed reads, partial writes, rename failure,
 source growth, existing/racing outputs, deadline and shutdown. Real-camera
-behavior remains untested. See [validation](docs/VALIDATION.md).
+fault handling and sustained behavior remain unverified. See [validation](docs/VALIDATION.md).
 
 ## Source and credits
 

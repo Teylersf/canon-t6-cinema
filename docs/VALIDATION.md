@@ -67,14 +67,23 @@ T6 with firmware 1.1.0; its private ROM1 dump matches the camera checksum.
 - The build checks the complete static ARM ELF load, including BSS, against
   `[0xC80000,0xD00000)`. The diagnostic image uses 462,848 bytes and leaves
   61,440 bytes in that reserve. Heap allocations and task stacks are separate.
+- The isolated symbolic video observer passes strict host tests, ASan/UBSan
+  and freestanding ARM946E-S compilation. Tests cover storage boundaries,
+  fixed field IDs, paired changes/failures, clock wrap, guard precedence,
+  deadlines and late ticks without catch-up. It is excluded from camera
+  builds and has no native address map or hardware observation result.
 
 The initial reference produces 2592×1728 output from a real 1300D embedded JPEG.
 No desktop timing is presented as a T6 processing-speed measurement.
 Emulation uses a derived ROM1 reset sector and an explicitly unvalidated ROM0
 mapping. It is startup/UI/API evidence, not a sensor or recording benchmark.
 
-The [source checks for commit 5e38354](https://github.com/Teylersf/canon-t6-cinema/actions/runs/41279295582)
-passed both Windows and host/ARM jobs, including the staged menu-intent test.
+The [source checks for commit 25ede55](https://github.com/Teylersf/canon-t6-cinema/actions/runs/41284484532)
+passed both Windows and host/ARM jobs, including the synthetic CPU benchmark,
+static-RAM guard and staged menu-intent test. The r12 card update backed up the
+six changed software files and read back all 27 package files successfully;
+the existing test photos, RAW files and settings retained their hashes.
+The owner's physical CPU report and unchanged 720p60 MOV are still pending.
 The first physical-card copy stalled with Windows disk event 153 I/O retries.
 After reconnecting the reader, the complete package copied and verified. The
 reviewed helper then marked the card. Official MLinstall crashed during device
