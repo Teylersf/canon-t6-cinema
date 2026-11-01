@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "artifact": "original camera ROM1 dump",
+  "models": ["Canon EOS Rebel T6", "Canon EOS 1300D", "Canon EOS Kiss X80"],
+  "platform": "1300D.110",
+  "canon_firmware": "1.1.0",
+  "acquired_date": "2026-10-31",
+  "filename": "ROM1.BIN",
+  "bytes": 33554432,
+  "sha256": "894ffd8c6e4ec7766754278e662899ffee06d62aaaf558f0836f6e771ade46db",
+  "md5": "01249972ece413315cbfac847a90fac7",
+  "camera_md5_matches": true,
+  "modified": false,
+  "last_65536_bytes_all_ff": true,
+  "rom0_included": false,
+  "complete_validated_emulator_rom_set": false,
+  "flashable_camera_update": false,
+  "device_specific_state_absence_verified": false,
+  "rights": "Canon firmware; proprietary; not relicensed under the repository GPL",
+  "release_tag": "rom-1300d-110-reference-v1",
+  "download_url": "https://github.com/Teylersf/canon-t6-cinema/releases/download/rom-1300d-110-reference-v1/t6-1300d-110-original-rom1.zip"
+}

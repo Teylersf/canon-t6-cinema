@@ -5,6 +5,11 @@ portable dumper and returned its output on a 16 GB card formatted by the camera.
 Both 32 MiB dumps, checksum files and the rescue log were copied into ignored
 private storage and checked against their source-card copies.
 
+**[Download the original ROM1 reference and view its checksums](ROM_DOWNLOAD.md).**
+The project owner subsequently explicitly requested public release of ROM1.
+Only that original ROM1 and sanitized documentation/checksums are published;
+the failed ROM0, rescue log and private analysis remain excluded.
+
 ROM1 matches the camera-generated MD5. ROM0 does not: its entire contents are
 one repeated four-byte pattern. ROM0 is not a validated firmware image. See the
 [emulator limitations](../integrations/qemu/README.md).
@@ -32,10 +37,13 @@ An earlier 32 GB spare card was reformatted after the owner confirmed its data
 was disposable, but camera compatibility was not established. The successful
 dump used a different 16 GB card formatted in the T6. The unchanged official
 dumper was copied to its root and read back with the same SHA-256 before use.
-The rescue log reported the camera BOOT flag as zero. The film overlay has not
-yet booted on the physical camera.
+The rescue log reported the camera BOOT flag as zero at acquisition. The film
+overlay subsequently booted on the physical camera, and later still processing
+and synthetic HEVC tests passed; see [validation](VALIDATION.md).
 
-Keep resulting ROM files and RESCUE.LOG private and outside Git. Check generated
-MD5 files against the actual dumps before emulator work; historical reports
+Keep private rescue logs, failed dumps and device diagnostic records outside
+Git. ROM1's owner-authorized reference release is separate from the GPL source
+and camera overlay packages. Check generated MD5 files against actual dumps
+before emulator work; historical reports
 include a ROM0 checksum discrepancy. A successful dump will not by itself
 validate saved-video effects or higher capture FPS.

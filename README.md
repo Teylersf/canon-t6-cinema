@@ -3,6 +3,12 @@
 Experimental Canon **EOS Rebel T6 / EOS 1300D / Kiss X80, firmware 1.1.0**
 Magic Lantern integration with Soup film looks and anamorphic-inspired effects.
 
+> **ROM DOWNLOAD — T6 / 1300D firmware 1.1.0:**
+> **[Download the original ROM1 dump ZIP](https://github.com/Teylersf/canon-t6-cinema/releases/download/rom-1300d-110-reference-v1/t6-1300d-110-original-rom1.zip)**
+> · [Checksums, provenance and usage](docs/ROM_DOWNLOAD.md).
+> Research/emulator reference with a blank reset bank; not a camera update or
+> installer. Failed ROM0 and private logs are excluded.
+
 **Status: experimental; manual still processing verified on the owner's physical T6.**
 Two in-camera JPEGs decoded at 2592×1728; the latest ETERNA/STRONG/BLUE image
 codestream matched the same desktop render byte for byte. Two short stock
@@ -156,7 +162,9 @@ python3 src/tools/build-t6.py --ml-source ../t6-ml \
 The script builds an isolated temporary source tree, preserving the upstream
 checkout. It generates `AUTOEXEC.BIN`, its matching `ML/modules/t6_110.sym`, bitmap
 fonts, film recipes, manifest and checksums. It never installs software, writes to a memory
-card, enables a boot flag or flashes a camera. No Canon ROMs are included.
+card, enables a boot flag or flashes a camera. Canon ROMs are not included in
+the overlay package or Git source; the separate ROM1 research download above
+has its own provenance and limitations.
 It also rejects a static ELF load/BSS footprint outside the pinned platform's
 512 KiB reserve; this does not account for heap allocations or task stacks.
 

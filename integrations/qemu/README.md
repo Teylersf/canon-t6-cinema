@@ -5,9 +5,11 @@ commit `4b667a1d3c08ab7a55835d15ddbd884fa754946d`, branch `qemu-eos-v4.2.1`.
 The required keycodemapdb submodule was checked out at
 `6b3d716e2b6472eb7189d3220552280ef3d832ce` through its upstream repository.
 
-The private T6 ROM1 matched the dumper's MD5. Original ROMs and logs are kept
-outside Git. Neither the emulation tests nor this patch access the USB camera
-or physical SD card.
+The T6 ROM1 matched the dumper's MD5. Its unchanged original is now available
+as a separate, owner-authorized [ROM1 reference download](../../docs/ROM_DOWNLOAD.md).
+ROM bytes remain outside Git source and overlay packages; failed ROM0 and
+private logs are excluded from that download. Neither the emulation tests nor
+this patch access the USB camera or physical SD card.
 
 ## Explicit diagnostic limitations
 
