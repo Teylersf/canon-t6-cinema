@@ -119,10 +119,28 @@ T6 with firmware 1.1.0; its private ROM1 dump matches the camera checksum.
   per-size budgets and independent diagnostic publication. Native emulation
   saved all three two-frame sizes and their CSVs. Independent exported-file
   decoding recovered exact pixels at 320×180, 4K and 8K; CSV fields matched
-  retained RAM and the full files' CRCs/counts. Physical r15 timing is pending.
+  retained RAM and the full files' CRCs/counts. The physical r15 T6 subsequently
+  saved all three sizes and their reports. Independent decoding recovered every
+  exact synthetic pixel, and card/host hashes, CSV fields and emulator bytes
+  agreed. The 4K/8K total times were 32.105/128.001 s, including both readbacks;
+  see the [phase measurements](HARDWARE_BASELINE.md). This remains generated
+  data, not a sensor capture mode.
 
 The initial reference produces 2592×1728 output from a real 1300D embedded JPEG.
 No desktop timing is presented as a T6 processing-speed measurement.
+
+The separate [PC video processor](../tools/pc-video/README.md) passed eight CUDA
+effect/recipe checks and 18 stream/publication contracts (one Windows symlink
+creation test skips without privileges; the Linux run passed all 18). On the
+owner's RTX 3090 it processed both complete original MOVs to HEVC/AAC, retaining
+349/800 frames, exact 30000/1001 and 60000/1001 rates, and 48 kHz stereo audio.
+Independent full output decoding and every decoded frame timestamp passed;
+all source hashes were unchanged. A two-frame 5184×3456 JPEG test also encoded
+at full geometry. That test repeats a public CC0 still and is not a measured
+camera burst. A short H.264 run passed, existing output refusal preserved its
+hash, and a forced processing deadline failed without publishing an output.
+This desktop work does not alter the camera firmware or establish a new
+sensor recording mode.
 Emulation uses a derived ROM1 reset sector and an explicitly unvalidated ROM0
 mapping. It is startup/UI/API evidence, not a sensor or recording benchmark.
 

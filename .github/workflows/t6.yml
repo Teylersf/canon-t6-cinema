@@ -26,6 +26,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends build-essential gcc-arm-none-eabi libnewlib-dev python3-pil python3-numpy ffmpeg
       - name: Host behavioral and malformed-input tests
         run: make -C src -f Makefile.t6 test
+      - name: PC video timing, stream and new-file contracts (no GPU dependency)
+        run: python3 tools/pc-video/test_pipeline.py
       - name: Fetch hash-pinned public T6 fixture
         run: python3 src/tools/fetch_t6_sample.py
       - name: Native worker and retro control regressions

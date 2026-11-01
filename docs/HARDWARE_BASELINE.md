@@ -82,6 +82,31 @@ which phase consumed the time. Its timestamps and decoder-default presentation
 rate are not capture-FPS measurements. These are generated pixels, with no live
 sensor source or audio.
 
+### Physical r15 4K/8K synthetic HEVC and phase reports
+
+The returned card contained three new HVCs and three corresponding CSVs.
+Read-only source/host SHA-256 checks agreed. Independent FFprobe/FFmpeg checks
+identified two frames per HVC and fully decoded every frame without errors.
+Every visible sample matched an independently generated test pattern. All
+three codestreams also matched their equivalent emulator files byte for byte.
+Report sizes, CRCs, CTUs, completed phase masks and I/O counters agreed with the
+actual files. Personal transfers and full receipts remain private.
+
+| Synthetic size, two frames | HVC bytes | Total ms | Encode/write ms | TMP verification ms | Final verification ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 320×180 | 184,649 | 261 | 151 | 51 | 50 |
+| 3840×2160 | 25,100,251 | 32,105 | 17,376 | 7,348 | 7,372 |
+| 7680×4320 | 99,662,491 | 128,001 | 69,495 | 29,236 | 29,261 |
+
+Setup/rename and time outside the phase counters account for the remaining
+milliseconds. The encoding phase includes test-pixel generation, codec work,
+writes, CRC and scheduler yields. Verification consumed about 46% of each
+large run. These timings cannot isolate CPU from storage, establish a measured
+r14-to-r15 speedup, or measure sensor recording FPS. The files contain generated
+pixels with no sensor capture, audio or declared presentation rate. Decoder
+fallback FPS is not a measurement. No card software or boot flags were changed
+during this read-only verification.
+
 ## Earlier read-only USB identity check
 
 | Item | Observed result |

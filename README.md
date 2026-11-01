@@ -7,8 +7,10 @@ Magic Lantern integration with Soup film looks and anamorphic-inspired effects.
 Two in-camera JPEGs decoded at 2592×1728; the latest ETERNA/STRONG/BLUE image
 codestream matched the same desktop render byte for byte. Two short stock
 1080p29.97/720p59.94 recordings also decode successfully; sustained operation
-remains unverified. The prototype processes **still photographs**. Baked-in video effects and higher
-frame-rate recording are research goals, **not implemented features**. This is
+remains unverified. The camera prototype processes **still photographs**. A separate
+[PC GPU processor](tools/pc-video/README.md) applies film/anamorphic effects to
+recorded video and JPEG sequences using CUDA and NVENC. Baked-in camera video
+effects and higher frame-rate recording remain research goals. This is
 not a complete Magic Lantern installer or a production-ready firmware release.
 
 ## What works in the prototype
@@ -36,9 +38,9 @@ not a complete Magic Lantern installer or a production-ready firmware release.
 - A manual **HEVC codec proof** generates two synthetic frames at 320×180,
   3840×2160 or 7680×4320 using a new small C encoder. It writes a new `.HVC`
   test file; this is not a sensor recording mode. The default size resets to
-  320×180 at boot. The physical T6's 320×180 file independently decodes to two
-  exact test frames. Native emulation also saved a valid 4K file; the physical
-  r14 4K/8K attempts reached their 30-second limit. See
+  320×180 at boot. The physical r15 T6 saved all three sizes. Every decoded
+  pixel matches the synthetic source; 4K took 32.105 s and 8K took 128.001 s,
+  including both verification passes. These are processing times, not FPS. See
   [HEVC experiments](#custom-hevc-experiments).
 - Half-resolution embedded-JPEG processing: the tested real T6 sample produces
   **2592 × 1728** JPEGs. This is not full sensor-RAW development.
@@ -56,6 +58,16 @@ This is an emulator capture. See [emulator setup and limitations](integrations/q
 and the [native file-I/O investigation](docs/NATIVE_FILE_IO.md).
 
 ## Video and high frame rates
+
+For **normal motion**, record the camera's existing H.264 MOV and process it on
+the computer. The [PC processor](tools/pc-video/README.md) uses CUDA for the look
+and NVENC for a separate HEVC/H.264 MP4, preserving the source cadence and
+re-encoding its audio to AAC. For **maximum spatial detail**, Large JPEG/RAW
+stills record 5184×3456 pixels. A JPEG sequence can retain that size in PC HEVC;
+Canon specifies up to about 3 stills/s with a short RAW burst. This is a
+still-derived sequence, not a 5K live movie mode. Codec choice does not unlock
+a higher-resolution sensor readout. RAW development is separate from this
+8-bit JPEG/video processor. [Canon specifications](https://sg.canon/en/support/6200330100).
 
 The prototype leaves Canon's MOV recording pipeline unchanged and stops the
 still worker in movie mode. It **does not bake these spatial effects into live

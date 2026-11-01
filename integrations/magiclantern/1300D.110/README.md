@@ -140,6 +140,11 @@ Successful generation/decoding proves the codec/file path for generated pixels;
 it does not prove 4K sensor readout, 8K captured detail or real-time recording.
 The separate host still-image frontend can use genuine 4K crops from the
 full-size CR2 JPEG. Native image-source integration remains separate work.
+The physical r15 T6 saved both larger proofs; independent full decoding and
+sample checks passed. Total times including both readbacks were 32.105 s at
+4K and 128.001 s at 8K. See the sanitized phase measurements in
+`docs/HARDWARE_BASELINE.md`. PC GPU processing is now a separate supported
+development path; it does not require further camera/card changes.
 
 The package includes `HEVCLIC.TXT` with the BSD notice for its normative CABAC
 table data. The experimental encoder's original code is GPL-2.0-only.
