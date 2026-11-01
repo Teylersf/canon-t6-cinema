@@ -37,6 +37,9 @@ whether a camera boot flag is set, whether some other Magic Lantern build is on
 a card, whether undocumented commands exist, or a fundamental hardware limit.
 No supported ML memory-read path was established by this check.
 
+See [ROM acquisition status](ROM_ACQUISITION.md) for the separate official-dumper
+download inspection and spare-card preparation.
+
 Still unverified on the physical camera:
 
 - Booting and operating the T6 Cinema overlay, its menus and still-image worker.
