@@ -14,6 +14,12 @@ T6 with firmware 1.1.0; its private ROM1 dump matches the camera checksum.
   source CR2 previews decode; transfer hashes match the card readback. No source
   hash was recorded before processing, so this is not a before/after hash proof
   of source immutability. Personal photographs and hashes remain outside Git.
+- The owner's r12 CPU report completed all three synthetic cases and validated
+  against its metadata, counts and extrema. Uncached Strong/Blue medians are
+  89, 388 and 510 ms at 320×180, 640×360 and 640×480. Two short stock recordings
+  decode completely with audio: 349 frames at 1080p29.97 and 800 at 720p59.94,
+  with constant expected PTS spacing. See the [physical baseline](HARDWARE_BASELINE.md)
+  for raw timings and limits. This is no saved-effect or higher-sensor-FPS proof.
 - Shared streaming anamorphic effect tests pass strict compilation, AddressSanitizer
   and UndefinedBehaviorSanitizer with recovery disabled.
 - CR2/JPEG malformed-input regression tests pass, including real T6 preview
@@ -64,9 +70,17 @@ T6 with firmware 1.1.0; its private ROM1 dump matches the camera checksum.
   reports, collisions and readback-allocation failures pass host sanitizers.
   Native photo elapsed formatting and shutter closure also passed. Emulator
   durations are not physical CPU or recording-speed measurements.
+- The version-2 comparison links separate size-optimized and `-O2` objects from
+  the same source. Strict and sanitizer tests cover both real kernels, every
+  call/comparison interruption boundary, allocation classes/overlap and output
+  mismatches. Native emulation saved nine rows, 27 timed samples and 24 matching
+  full-frame comparisons; exported CSV fields matched retained RAM results.
+  The menu closed normally on half-shutter. Physical version-2 timings remain
+  pending; the emulator does not model the camera's cache performance.
 - The build checks the complete static ARM ELF load, including BSS, against
-  `[0xC80000,0xD00000)`. The diagnostic image uses 462,848 bytes and leaves
-  61,440 bytes in that reserve. Heap allocations and task stacks are separate.
+  `[0xC80000,0xD00000)`. The r12 image uses 462,848 bytes; the r13 comparison
+  image uses 468,736 bytes and leaves 55,552 bytes in that reserve. Heap
+  allocations and task stacks are separate.
 - The isolated symbolic video observer passes strict host tests, ASan/UBSan
   and freestanding ARM946E-S compilation. Tests cover storage boundaries,
   fixed field IDs, paired changes/failures, clock wrap, guard precedence,
@@ -83,7 +97,8 @@ passed both Windows and host/ARM jobs, including the synthetic CPU benchmark,
 static-RAM guard and staged menu-intent test. The r12 card update backed up the
 six changed software files and read back all 27 package files successfully;
 the existing test photos, RAW files and settings retained their hashes.
-The owner's physical CPU report and unchanged 720p60 MOV are still pending.
+The owner's r12 CPU report and unchanged 1080p/720p MOVs were subsequently
+copied read-only, transfer-hash verified and analyzed as described above.
 The first physical-card copy stalled with Windows disk event 153 I/O retries.
 After reconnecting the reader, the complete package copied and verified. The
 reviewed helper then marked the card. Official MLinstall crashed during device

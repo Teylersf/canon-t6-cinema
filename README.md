@@ -5,8 +5,9 @@ Magic Lantern integration with Soup film looks and anamorphic-inspired effects.
 
 **Status: experimental; manual still processing verified on the owner's physical T6.**
 Two in-camera JPEGs decoded at 2592×1728; the latest ETERNA/STRONG/BLUE image
-codestream matched the same desktop render byte for byte. Sustained operation
-and recording remain unverified. The prototype processes **still photographs**. Baked-in video effects and higher
+codestream matched the same desktop render byte for byte. Two short stock
+1080p29.97/720p59.94 recordings also decode successfully; sustained operation
+remains unverified. The prototype processes **still photographs**. Baked-in video effects and higher
 frame-rate recording are research goals, **not implemented features**. This is
 not a complete Magic Lantern installer or a production-ready firmware release.
 
@@ -24,7 +25,8 @@ not a complete Magic Lantern installer or a production-ready firmware release.
 - A manual **Develop latest** command and bounded automatic processing.
   Automatic processing always starts OFF after boot.
 - Photo status reports elapsed wall time, including I/O. A manual **CPU limits
-  test** records a bounded synthetic YUV workload to a new CSV; these kernel
+  test** compares uncached, cached and compiler-optimized synthetic YUV
+  workloads with byte output checks, then writes a new CSV. These kernel
   timings do not measure saved-video FPS. See the [camera notes](integrations/magiclantern/1300D.110/README.md).
 - Separate `T6F_####.JPG` outputs. Source CR2s and their embedded previews are
   opened read-only, never rewritten or deleted. Detected existing outputs are
@@ -64,6 +66,9 @@ An isolated [packed-YUV processing prototype](src/experimental/yuv_anamorphic/RE
 uses integer highlight streaks and row scratch. The diagnostic build links it
 only for owned synthetic benchmark frames. There is no encoder-frame hook, and
 the T6 recording format, buffer ownership and effect throughput remain unverified.
+Physical r12 timings for the uncached, size-optimized kernel are now recorded
+in the [hardware baseline](docs/HARDWARE_BASELINE.md); this path exceeds video
+frame intervals and does not establish maximum CPU capability.
 An isolated [fixed-field observer](src/experimental/t6_video_probe/README.md)
 provides bounded, timestamped observations through symbolic callbacks. It has
 no native address map or camera integration and is excluded from camera builds.
@@ -132,6 +137,9 @@ python3 src/tools/fetch_t6_sample.py  # optional CC0 reference fixture
 make -C src/tools/t6_worker_test test
 make -C src/tools/t6_worker_test asan
 make -C src/tools/t6_worker_test retro retro-asan
+make -C src/tools/t6_cpu_bench_test test asan
+make -C src/experimental/yuv_anamorphic test asan arm
+make -C src/experimental/t6_video_probe test asan arm
 ```
 
 Tests cover effect behavior and memory limits, malformed CR2/JPEG/stock files,

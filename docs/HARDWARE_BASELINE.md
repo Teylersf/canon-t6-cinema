@@ -1,7 +1,48 @@
 # Sanitized T6 hardware baseline
 
-Observed during the 2026-10-31 session (America/Los_Angeles). This records a
-bounded USB identity/protocol check, not a camera-firmware or video benchmark.
+Observed during the 2026-10-31 and 2026-11-01 sessions (America/Los_Angeles).
+The USB check below and later physical tests are separate observations.
+
+## Physical still, recording and CPU tests
+
+The owner booted the r11 overlay and produced two 2592×1728 JPEGs. Both decoded
+fully; the latest ETERNA/STRONG/BLUE image codestream matched the desktop
+reference byte for byte, excluding metadata. See [validation](VALIDATION.md).
+
+With the r12 diagnostic card, the owner ran the CPU test and made two normal
+Canon recordings. Read-only transfers of the CSV and both MOVs matched their
+card SHA-256 values. The personal media and transfer receipts remain private.
+
+| Saved video | Rate | Decoded frames | Video duration |
+| --- | --- | --- | --- |
+| 1920×1080 | 30000/1001 (29.97 fps) | 349 | 11.645 s |
+| 1280×720 | 60000/1001 (59.94 fps) | 800 | 13.347 s |
+
+Both H.264 streams and their 48 kHz two-channel PCM audio decoded completely without
+errors. Every adjacent decoded video timestamp had the expected 1001-tick step
+at timebases 1/30000 and 1/60000 respectively. This establishes two short stock
+recording baselines with r12 present, not sustained stability, calibrated unique
+sensor exposures or advanced effects in saved video. The decoded `yuvj420p`
+format does not establish Canon's native pre-encoder input-buffer layout.
+
+The offscreen Strong/Blue packed-YUV test completed one warmup and three timed
+calls at each size, using owned **uncached** `fio_malloc` memory:
+
+| Synthetic frame | Raw timed calls (ms) | Median (ms) |
+| --- | --- | --- |
+| 320×180 | 122, 89, 89 | 89 |
+| 640×360 | 390, 388, 359 | 388 |
+| 640×480 | 510, 507, 510 | 510 |
+
+The CSV metadata, sample counts and extrema validated independently. Total
+elapsed time before freeing memory/report I/O was 4339 ms. Millisecond timings
+include scheduling delays, and three samples are not a sustained worst-case
+bound. This build uses the size-optimized kernel and uncached pixels/scratch;
+these results are not a maximum CPU capability or recording-FPS measurement.
+The current path exceeds a 29.97/59.94 fps frame interval even at the smallest
+tested size. Cache and compiler effects require separate physical comparisons.
+
+## Earlier read-only USB identity check
 
 | Item | Observed result |
 | --- | --- |
@@ -42,15 +83,16 @@ download inspection and spare-card preparation.
 
 Still unverified on the physical camera:
 
-- Booting and operating the T6 Cinema overlay, its menus and still-image worker.
+- Full control coverage, automatic processing and sustained overlay operation.
 - DryOS exclusive-open and rename collision behavior.
-- Pre-encode movie buffer ownership, saved-video effects and normal recording
+- Pre-encode movie buffer ownership, saved-video effects and sustained recording
   behavior under experimental code.
 - Any experimental capture/frame rate, sustainable processing throughput,
   duplicated/dropped frame behavior, audio drift or thermal limit.
 
-The published Canon recording modes remain manufacturer specifications; this
-USB check does not measure them or establish a higher FPS ceiling. See
+The earlier USB check did not measure recording modes. The later clips above
+confirm their saved cadence for those short runs and establish no higher FPS
+ceiling. See
 [HIGH_FPS.md](HIGH_FPS.md) and [VIDEO_RESEARCH.md](VIDEO_RESEARCH.md).
 
 The [camera-info tool](../tools/read-only-camera-info/README.md) documents the

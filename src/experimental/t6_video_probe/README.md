@@ -82,9 +82,10 @@ se_tvp_tick(&probe, &in, &io);
 The paired values are not atomic. Unchanged words cannot prove producer
 readiness, encoder ownership/release, DMA lifetime, pixel format, row stride,
 cache coherency, an available processing interval, unique exposures or FPS.
-No image-processing insertion point is established. Physical CPU results and
-an unchanged baseline MOV are still separate prerequisites to further native
-research.
+No image-processing insertion point is established. The acquired physical CPU
+results and unchanged baseline MOVs support further research; the current
+uncached kernel timings motivate a controlled memory/compiler comparison
+before integrating any native observer or image processing.
 
 ## Validation
 

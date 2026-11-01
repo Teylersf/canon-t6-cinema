@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a hardware-untested EOS Rebel T6 / 1300D.110 experiment.
+"""Build an experimental EOS Rebel T6 / 1300D.110 overlay.
 
 Requires Linux (or WSL), GNU make, git, gcc and arm-none-eabi-gcc.
 Reads a clean, exactly pinned ML checkout; builds an isolated archive copy.
@@ -394,7 +394,8 @@ def package(stage, destination, log, toolchain):
         "native_fio_validation": "exclusive-create and rename collision semantics hardware unverified",
         "retro_ui": "native custom-menu renderer; checked pinned source gates; hardware untested",
         "retro_ui_source_patches": ["src/gui-common.c", "src/menu.c"],
-        "video_cpu_benchmark": "owned synthetic packed-YUV workload only; no encoder hook or recording-FPS result",
+        "video_cpu_benchmark": "owned synthetic Os/uncached, Os/cached and O2/cached comparison with output checks; no encoder hook or recording-FPS result",
+        "synthetic_cpu_report_version": 2,
     }
     for path in sorted(destination.rglob("*")):
         if path.is_file():
@@ -450,7 +451,7 @@ def main():
         print(log.read_text()[-16000:], file=sys.stderr)
         fail("compile failed; retained stage and log at " + str(log))
     package(stage, args.output.resolve(), log, toolchain)
-    print("Built hardware-untested experiment:", args.output.resolve())
+    print("Built experimental overlay:", args.output.resolve())
     print("No camera, card, boot flag or firmware was modified.")
 
 

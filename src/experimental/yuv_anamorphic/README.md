@@ -7,11 +7,17 @@ screen-style luma lift, and shared-pair chroma tint. It produces stylized
 streaks; it does not simulate optical anamorphic bokeh, change field of view,
 or desqueeze an image. Source license: GPL-2.0-only.
 
-**The actual T6 encoder format, stride, buffer ownership and available CPU time
+**The actual T6 encoder format, stride, buffer ownership and available encoder processing time
 remain unknown.** There is no camera frame hook or r11 integration. The newer
 diagnostic build links this kernel only for an offscreen test on owned synthetic
 pixels. Host tests, ARM compilation and those kernel timings establish no
 recording FPS.
+
+The owner's r12 uncached, size-optimized benchmark completed with medians of
+89 ms at 320×180, 388 ms at 640×360 and 510 ms at 640×480. See the
+[physical baseline](../../../docs/HARDWARE_BASELINE.md) for all samples and
+limits. Cached memory and optimized compilation have not yet been physically
+compared; these initial timings are not a maximum throughput measurement.
 
 ## Explicit input contracts
 

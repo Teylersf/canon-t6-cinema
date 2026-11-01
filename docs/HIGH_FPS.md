@@ -2,7 +2,7 @@
 
 Target: EOS Rebel T6 / EOS 1300D / Kiss X80, Canon firmware 1.1.0.
 Source audited: Magic Lantern `142472e95054d73640f50789ac0fd66325499d82`.
-Assessment date: 2026-10-31, America/Los_Angeles.
+Assessment date: 2026-11-01, America/Los_Angeles.
 
 ## What is established
 
@@ -19,6 +19,13 @@ These are manufacturer specifications, not measurements of this experiment.
 Lowering the selected output resolution to VGA does not itself unlock a higher
 published frame rate. PAL settings have different available rates; log the
 camera's selected video system during testing.
+
+The owner has since supplied two normal Canon MOVs recorded with the r12
+diagnostic card: 349 decoded frames at 1920×1080, 30000/1001 fps over 11.645 s;
+and 800 decoded frames at 1280×720, 60000/1001 fps over 13.347 s. Both video and
+audio decoded without errors, with constant expected video PTS spacing. These
+short saved-video baselines do not establish calibrated unique sensor exposures
+or a higher capture rate. See the [physical results](HARDWARE_BASELINE.md).
 
 **No experimental T6 recording rate above these modes has been verified here.**
 No reliable 90/120/240-fps capability or maximum overclock rate can be quoted

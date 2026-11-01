@@ -13,7 +13,7 @@
 #define CHECK(c) do { if (!(c)) { fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#c); exit(1); } } while(0)
 #define CSV_ONE "ML/FILM/CPUB0001.CSV"
 #define TMP_ONE "ML/FILM/CPUB0001.TMP"
-#define REPORT_CAPACITY 2048u
+#define REPORT_CAPACITY 4096u
 #define BIG_ALLOCATION 615680u
 
 typedef struct {
@@ -30,12 +30,15 @@ typedef struct {
 static mock_file files[40];
 static mock_handle handles[8];
 static void *big_pointer;
+static void *cached_pointer;
+static int cached_live, failed_allocations, wrong_class, classified_span_fault;
 static int big_live, allocations, frees, kernel_calls, sleeps, fio_calls;
 static void *verify_pointer;
 static int verify_live, verify_allocations, verify_frees, verify_failed_allocations, fail_verify_allocation;
 static int writes, reads, renames, removals, exclusive_opens;
 static unsigned clock_ms;
-static const uint32_t durations[12] = {5,7,3,9, 4,12,11,10, 6,2,5,4};
+static int real_kernels, mismatch_at, comparison_calls, comparison_at, comparison_kind;
+static uint32_t duration(unsigned call) { return 2u + call % 11u; }
 static int cancel_now, half_pressed, movie_mode;
 static int fail_allocation, fail_kernel_at, cancel_at, shutdown_at;
 static int capture_at, half_at, lv_at, movie_at, deadline_at;
@@ -85,7 +88,7 @@ static void path_checked(const char *path)
 
 static void report_io(void)
 {
-    CHECK(!big_live && big_pointer==NULL);
+    CHECK(!big_live && big_pointer==NULL && !cached_live && cached_pointer==NULL);
     CHECK(kernel_calls==expected_fio_after_calls);
     ++fio_calls;
     clock_ms+=report_clock_advance;
@@ -138,11 +141,12 @@ void *fio_malloc(size_t size)
     CHECK(!big_live && big_pointer==NULL && !verify_live && verify_pointer==NULL);
     if(size==BIG_ALLOCATION) {
         ++allocations;
-        if(fail_allocation)return NULL;
+        if(fail_allocation==1){++failed_allocations;return NULL;}
         big_pointer=malloc(size);CHECK(big_pointer);
         memset(big_pointer,0xc7,size);
         big_live=1;return big_pointer;
     }
+    CHECK(!cached_live && cached_pointer==NULL);
     CHECK(size==64u);
     CHECK(kernel_calls==expected_fio_after_calls);
     ++verify_allocations;
@@ -157,13 +161,37 @@ void *fio_malloc(size_t size)
 void fio_free(void *pointer)
 {
     if(big_live && pointer==big_pointer) {
-        CHECK(!verify_live && verify_pointer==NULL);
+        CHECK(!verify_live && verify_pointer==NULL && !cached_live && cached_pointer==NULL);
         touched_before_free=((const uint8_t *)pointer)[0]!=0xc7;
         free(pointer);big_pointer=NULL;big_live=0;++frees;
         return;
     }
-    CHECK(verify_live && pointer==verify_pointer && !big_live && big_pointer==NULL);
+    CHECK(verify_live && pointer==verify_pointer && !big_live && big_pointer==NULL && !cached_live && cached_pointer==NULL);
     free(pointer);verify_pointer=NULL;verify_live=0;++verify_frees;
+}
+
+void *tmp_malloc(size_t size)
+{
+    CHECK(size==BIG_ALLOCATION && big_live && !cached_live && !verify_live);
+    ++allocations;
+    if(fail_allocation==2){++failed_allocations;return NULL;}
+    cached_pointer=malloc(size);CHECK(cached_pointer);
+    memset(cached_pointer,0xc7,size);cached_live=1;return cached_pointer;
+}
+
+void tmp_free(void *pointer)
+{
+    CHECK(cached_live && pointer==cached_pointer && !verify_live);
+    free(pointer);cached_pointer=NULL;cached_live=0;++frees;
+}
+
+void *test_cacheable(void *pointer)
+{
+    CHECK((pointer==big_pointer && big_live) || (pointer==cached_pointer && cached_live));
+    if(pointer==big_pointer && classified_span_fault==1)return cached_pointer;
+    if(pointer==big_pointer && classified_span_fault==2)return (void *)(UINTPTR_MAX-32u);
+    if(pointer==big_pointer)return wrong_class==1 ? pointer:(uint8_t *)pointer+1;
+    return wrong_class==2 ? (uint8_t *)pointer+1:pointer;
 }
 
 int is_file(const char *path)
@@ -298,15 +326,26 @@ static void check_fresh_synthetic_source(const se_ya_frame *frame)
     }
 }
 
+se_ya_result se_ya_apply_o2(const se_ya_frame *frame,const se_ya_params *params,
+                          void *scratch,size_t scratch_size);
+
+static unsigned call_variant(unsigned call)
+{
+    unsigned run=(call/3u)%4u,position=call%3u;
+    return position<2u ? ((run&1u)^position):2u;
+}
+
 static se_ya_result counted_kernel(const se_ya_frame *frame,const se_ya_params *params,
-                                  void *scratch,size_t scratch_size)
+                                  void *scratch,size_t scratch_size,int optimized)
 {
     static const uint32_t widths[3]={320,640,640}, heights[3]={180,360,480};
     se_ya_params recipe;
     se_ya_result result;
-    unsigned index=(unsigned)kernel_calls, which=index/4u;
-    CHECK(big_live && allocations==1 && frees==0 && index<12);
-    CHECK(frame->data==big_pointer && scratch==(uint8_t *)big_pointer+614400u);
+    unsigned index=(unsigned)kernel_calls,which=index/12u,variant=call_variant(index);
+    void *expected=variant ? cached_pointer:big_pointer;
+    CHECK(big_live && cached_live && allocations==2 && frees==0 && index<36);
+    CHECK(optimized==(variant==2u));
+    CHECK(frame->data==expected && scratch==(uint8_t *)expected+614400u);
     CHECK(scratch_size==1280u && frame->bytes<=614400u);
     CHECK(frame->width==widths[which] && frame->height==heights[which]);
     CHECK(frame->stride==(size_t)frame->width*2u);
@@ -319,8 +358,18 @@ static se_ya_result counted_kernel(const se_ya_frame *frame,const se_ya_params *
     CHECK(params->short_decay_shift==recipe.short_decay_shift && params->long_decay_shift==recipe.long_decay_shift);
     check_fresh_synthetic_source(frame);
     ++kernel_calls;
-    result=fail_kernel_at==kernel_calls ? SE_YA_BAD_DESCRIPTOR : se_ya_apply(frame,params,scratch,scratch_size);
-    clock_ms+=durations[index];
+    if(fail_kernel_at==kernel_calls)result=SE_YA_BAD_DESCRIPTOR;
+    else if(real_kernels)result=optimized ? se_ya_apply_o2(frame,params,scratch,scratch_size):se_ya_apply(frame,params,scratch,scratch_size);
+    else {
+        /* Fault scenarios isolate the native benchmark state machine. Full
+         * real-kernel comparison is exercised separately at both variants. */
+        size_t bytes=(size_t)frame->width*frame->height*2u;
+        frame->data[0]^=0x20;
+        frame->data[bytes-1u]^=0x10;
+        result=SE_YA_OK;
+    }
+    if(mismatch_at==kernel_calls)frame->data[0]^=1;
+    clock_ms+=duration(index);
     if(cancel_at==kernel_calls)cancel_now=1;
     if(shutdown_at==kernel_calls)ml_shutdown_requested=1;
     if(capture_at==kernel_calls)lens_info.job_state=1;
@@ -328,6 +377,27 @@ static se_ya_result counted_kernel(const se_ya_frame *frame,const se_ya_params *
     if(lv_at==kernel_calls)lv=1;
     if(movie_at==kernel_calls)movie_mode=1;
     if(deadline_at==kernel_calls)clock_ms+=10000u;
+    return result;
+}
+
+static se_ya_result counted_os(const se_ya_frame *frame,const se_ya_params *params,
+                              void *scratch,size_t scratch_size)
+{return counted_kernel(frame,params,scratch,scratch_size,0);}
+
+static se_ya_result counted_o2(const se_ya_frame *frame,const se_ya_params *params,
+                              void *scratch,size_t scratch_size)
+{return counted_kernel(frame,params,scratch,scratch_size,1);}
+
+static int checked_memcmp(const void *left,const void *right,size_t size)
+{
+    int result;
+    if(size>64u) {
+        CHECK(big_live && cached_live && left==big_pointer && right==cached_pointer);
+        CHECK(size==(size_t)(kernel_calls<=12 ? 320u:640u)*(kernel_calls<=12 ? 180u:kernel_calls<=24 ? 360u:480u)*2u);
+        ++comparison_calls;
+    }
+    result=memcmp(left,right,size);
+    if(size>64u && comparison_at==comparison_calls)inject_guard(comparison_kind);
     return result;
 }
 
@@ -345,18 +415,23 @@ static int checked_snprintf(char *destination,size_t size,const char *format,...
     va_start(args,format);result=vsnprintf(destination,size,format,args);va_end(args);return result;
 }
 
-#define se_ya_apply counted_kernel
+#define se_ya_apply counted_os
+#define se_ya_apply_o2 counted_o2
+#define memcmp checked_memcmp
 #define snprintf checked_snprintf
 #include "../../../integrations/magiclantern/1300D.110/src/film_cpu_bench.c"
 #undef snprintf
 #undef se_ya_apply
+#undef se_ya_apply_o2
+#undef memcmp
 
 static void reset(void)
 {
-    CHECK(!big_live && big_pointer==NULL && !verify_live && verify_pointer==NULL);
+    CHECK(!big_live && big_pointer==NULL && !cached_live && cached_pointer==NULL && !verify_live && verify_pointer==NULL);
     memset(files,0,sizeof(files));memset(handles,0,sizeof(handles));
     status_text[0]=0;
     allocations=frees=kernel_calls=sleeps=fio_calls=0;
+    failed_allocations=wrong_class=classified_span_fault=real_kernels=mismatch_at=comparison_calls=comparison_at=comparison_kind=0;
     verify_allocations=verify_frees=verify_failed_allocations=fail_verify_allocation=0;
     writes=reads=renames=removals=exclusive_opens=0;
     clock_ms=0;cancel_now=half_pressed=movie_mode=lv=ml_shutdown_requested=0;
@@ -367,16 +442,16 @@ static void reset(void)
     corrupt_csv_read=wrong_csv_size=fail_csv_open=zero_csv_read=grow_on_read=0;
     expected_deadline_csv=report_stop_phase=report_stop_kind=report_stop_done=0;
     report_clock_advance=0;
-    expected_fio_after_calls=12;
+    expected_fio_after_calls=36;
 }
 
 static void no_handles_or_allocations(void)
 {
     unsigned i;
-    CHECK(!big_live && big_pointer==NULL);
+    CHECK(!big_live && big_pointer==NULL && !cached_live && cached_pointer==NULL);
     CHECK(!verify_live && verify_pointer==NULL);
     for(i=0;i<8;++i)CHECK(!handles[i].open);
-    CHECK(frees==allocations || (fail_allocation && frees==0));
+    CHECK(frees+failed_allocations==allocations);
     CHECK(verify_frees+verify_failed_allocations==verify_allocations);
 }
 
@@ -392,29 +467,33 @@ static void assert_csv(const char *path)
     const struct film_cpu_results *results=film_cpu_bench_get_results();
     char text[REPORT_CAPACITY+1u],*line;
     unsigned i,j;
-    long long values[10];
+    long long values[12];
     CHECK(file && file->ours && file->size>0 && file->size<=REPORT_CAPACITY);
     CHECK(!memchr(file->data,0,file->size));
     memcpy(text,file->data,file->size);text[file->size]=0;
-    CHECK(strstr(text,"type,synthetic_cpu_kernel_only\n"));
+    CHECK(strstr(text,"type,synthetic_cpu_memory_optimization_comparison\n"));
+    CHECK(strstr(text,"version,2\n") && strstr(text,"comparisons_timed,0\n"));
+    CHECK(strstr(text,"cached_allocation_api,tmp_malloc\n"));
+    CHECK(strstr(text,"uncached_allocation_api,fio_malloc\n"));
+    CHECK(strstr(text,"memory_access,separate_returned_aliases\n"));
     CHECK(strstr(text,"layout,YUYV\n") && strstr(text,"chroma,unsigned128\n"));
     CHECK(strstr(text,"range,studio_Y16_235_C16_240\n") && strstr(text,"fills_timed,0\n"));
     CHECK(strstr(text,"encoder_measured,0\n") && strstr(text,"recording_fps_measured,0\n"));
     CHECK(strstr(text,"unique_exposures_measured,0\n") && strstr(text,"actual_camera_format_known,0\n"));
     CHECK(strstr(text,"timed_per_case_requested,3\n"));
     CHECK(strstr(text,expected_deadline_csv ? "status,deadline\n":"status,complete\n"));
-    line=strstr(text,"case,width,height,warmup,completed_frames,ms1,ms2,ms3,min_ms,max_ms");
+    line=strstr(text,"case,variant,width,height,warmup,completed_frames,compared_outputs,ms1,ms2,ms3,min_ms,max_ms");
     CHECK(line);line=strchr(line,'\n');CHECK(line);++line;
-    for(i=0;i<3;++i) {
+    for(i=0;i<FILM_CPU_CASES;++i) {
         const struct film_cpu_case *item=&results->cases[i];
-        CHECK(sscanf(line,"%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld",
+        CHECK(sscanf(line,"%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld",
               &values[0],&values[1],&values[2],&values[3],&values[4],
-              &values[5],&values[6],&values[7],&values[8],&values[9])==10);
-        CHECK(values[0]==i && values[1]==item->width && values[2]==item->height);
-        CHECK(values[3]==item->warmup_done && values[4]==item->count);
-        for(j=0;j<3;++j)CHECK(values[5u+j]==(j<item->count ? (long long)item->milliseconds[j]:-1ll));
-        CHECK(values[8]==(item->count ? (long long)item->minimum_ms:-1ll));
-        CHECK(values[9]==(item->count ? (long long)item->maximum_ms:-1ll));
+              &values[5],&values[6],&values[7],&values[8],&values[9],&values[10],&values[11])==12);
+        CHECK(values[0]==i && values[1]==item->variant && values[2]==item->width && values[3]==item->height);
+        CHECK(values[4]==item->warmup_done && values[5]==item->count && values[6]==item->compared_outputs);
+        for(j=0;j<3;++j)CHECK(values[7u+j]==(j<item->count ? (long long)item->milliseconds[j]:-1ll));
+        CHECK(values[10]==(item->count ? (long long)item->minimum_ms:-1ll));
+        CHECK(values[11]==(item->count ? (long long)item->maximum_ms:-1ll));
         line=strchr(line,'\n');CHECK(line);++line;
     }
 }
@@ -425,25 +504,27 @@ static void test_success_and_wrap(void)
     for(wrap=0;wrap<2;++wrap) {
         unsigned started;
         const struct film_cpu_results *results;
-        reset();if(wrap)clock_ms=UINT32_MAX-20u;started=clock_ms;
+        reset();real_kernels=1;if(wrap)clock_ms=UINT32_MAX-20u;started=clock_ms;
         CHECK(film_cpu_bench()==0);results=film_cpu_bench_get_results();
-        CHECK(results->state==FILM_CPU_SAVED && results->cases_completed==3);
-        CHECK(results->version==1);
+        CHECK(results->state==FILM_CPU_SAVED && results->cases_completed==9);
+        CHECK(results->version==2 && results->memory_classes_checked==1 && results->comparisons_complete==1);
         CHECK(results->elapsed_ms==clock_ms-started);
-        CHECK(kernel_calls==12 && sleeps>=11 && sleeps<=12);
-        CHECK(allocations==1 && frees==1 && writes>0 && reads>0 && renames==1 && removals==0);
+        CHECK(kernel_calls==36 && sleeps==36 && comparison_calls==24);
+        CHECK(allocations==2 && frees==2 && writes>0 && reads>0 && renames==1 && removals==0);
         CHECK(verify_allocations==2 && verify_frees==2 && !verify_failed_allocations);
         CHECK(!strcmp(results->report_path,CSV_ONE));
-        for(i=0;i<3;++i) {
+        for(i=0;i<FILM_CPU_CASES;++i) {
             const struct film_cpu_case *item=&results->cases[i];
             uint32_t minimum=UINT32_MAX,maximum=0;
-            CHECK(item->warmup_done==1 && item->count==3);
-            for(j=0;j<3;++j) {
-                uint32_t duration=durations[i*4u+j+1u];
-                CHECK(item->milliseconds[j]==duration);
-                if(duration<minimum)minimum=duration;
-                if(duration>maximum)maximum=duration;
+            unsigned n=0;
+            CHECK(item->warmup_done==1 && item->count==3 && item->compared_outputs==(item->variant ? 4u:0u));
+            for(j=0;j<36;++j)if(j/12u==i/3u && (j/3u)%4u && call_variant(j)==i%3u) {
+                uint32_t time=duration(j);
+                CHECK(item->milliseconds[n++]==time);
+                if(time<minimum)minimum=time;
+                if(time>maximum)maximum=time;
             }
+            CHECK(n==3);
             CHECK(item->minimum_ms==minimum && item->maximum_ms==maximum);
         }
         assert_csv(CSV_ONE);no_handles_or_allocations();
@@ -455,32 +536,53 @@ static void assert_partial_progress(unsigned completed_calls)
     static const uint32_t widths[3]={320,640,640},heights[3]={180,360,480};
     const struct film_cpu_results *results=film_cpu_bench_get_results();
     unsigned c,j,complete=0;
-    for(c=0;c<3;++c) {
+    for(c=0;c<FILM_CPU_CASES;++c) {
         const struct film_cpu_case *item=&results->cases[c];
-        unsigned available=completed_calls>c*4u ? completed_calls-c*4u:0;
-        unsigned count=available>1u ? available-1u:0;
+        unsigned count=0,warmup=0,compared=0;
         uint32_t minimum=UINT32_MAX,maximum=0;
-        if(count>3)count=3;
-        CHECK(item->width==widths[c] && item->height==heights[c]);
-        CHECK(item->warmup_done==(available>0) && item->count==count);
-        for(j=0;j<count;++j) {
-            unsigned call=c*4u+2u+j;
-            uint32_t expected=durations[call-1u]+(deadline_at==(int)call ? 10000u:0u);
-            CHECK(item->milliseconds[j]==expected);
-            if(expected<minimum)minimum=expected;
-            if(expected>maximum)maximum=expected;
+        CHECK(item->width==widths[c/3u] && item->height==heights[c/3u] && item->variant==c%3u);
+        for(j=0;j<completed_calls;++j)if(j/12u==c/3u && call_variant(j)==c%3u) {
+            if((j/3u)%4u) {
+                uint32_t expected=duration(j)+(deadline_at==(int)j+1 ? 10000u:0u);
+                CHECK(item->milliseconds[count++]==expected);
+                if(expected<minimum)minimum=expected;
+                if(expected>maximum)maximum=expected;
+            } else warmup=1;
         }
+        CHECK(item->warmup_done==warmup && item->count==count);
+        for(j=0;j<(unsigned)comparison_calls;++j)
+            if(j/8u==c/3u && 1u+j%2u==c%3u)++compared;
+        CHECK(item->compared_outputs==compared);
+        CHECK(item->compared_outputs<=(item->variant ? warmup+count:0u));
         if(count)CHECK(item->minimum_ms==minimum && item->maximum_ms==maximum);
         if(count==3)complete++;
     }
     CHECK(results->cases_completed==complete);
+    CHECK(results->comparisons_complete==(comparison_calls==24));
+}
+
+static void test_comparison_boundaries(void)
+{
+    unsigned kind,comparison;
+    for(kind=1;kind<=7;++kind)for(comparison=1;comparison<=24;++comparison) {
+        unsigned expected_calls=((comparison-1u)/2u)*3u+((comparison&1u) ? 2u:3u);
+        const struct film_cpu_results *results;
+        reset();comparison_at=(int)comparison;comparison_kind=(int)kind;
+        if(kind==7){expected_deadline_csv=1;expected_fio_after_calls=(int)expected_calls;}
+        CHECK(film_cpu_bench()==(kind==7 ? 0:1));results=film_cpu_bench_get_results();
+        CHECK(kernel_calls==(int)expected_calls && comparison_calls==(int)comparison);
+        CHECK(results->state==(kind<=2 ? FILM_CPU_CANCELLED:kind==7 ? FILM_CPU_DEADLINE:FILM_CPU_BUSY));
+        CHECK(results->comparisons_complete==(comparison==24));
+        if(kind==7){CHECK(fio_calls>0);assert_csv(CSV_ONE);}else CHECK(fio_calls==0);
+        assert_partial_progress(expected_calls);no_handles_or_allocations();
+    }
 }
 
 static void test_cancel_busy_and_kernel(void)
 {
     unsigned injection,call;
     for(injection=0;injection<7;++injection)
-        for(call=1;call<=12;++call) {
+        for(call=1;call<=36;++call) {
             const struct film_cpu_results *results;
             reset();
             switch(injection) {
@@ -501,14 +603,10 @@ static void test_cancel_busy_and_kernel(void)
                 CHECK(fio_calls>0 && !strcmp(results->report_path,CSV_ONE));assert_csv(CSV_ONE);
             } else CHECK(fio_calls==0 && !results->report_path[0]);
             CHECK(results->state==(injection<2 ? FILM_CPU_CANCELLED : injection==6 ? FILM_CPU_DEADLINE : FILM_CPU_BUSY));
-            CHECK(results->cases[(call-1u)/4u].warmup_done==1);
-            CHECK(results->cases[(call-1u)/4u].count==(call-1u)%4u);
-            if((call-1u)%4u)
-                CHECK(results->cases[(call-1u)/4u].milliseconds[(call-1u)%4u-1u]==durations[call-1u]+(injection==6 ? 10000u:0u));
             assert_partial_progress(call);
             no_handles_or_allocations();
         }
-    for(call=1;call<=12;++call) {
+    for(call=1;call<=36;++call) {
         reset();fail_kernel_at=(int)call;
         CHECK(film_cpu_bench()==-1 && kernel_calls==(int)call && fio_calls==0);
         CHECK(film_cpu_bench_get_results()->state==FILM_CPU_KERNEL_ERROR);
@@ -524,25 +622,46 @@ static void test_cancel_busy_and_kernel(void)
         CHECK(film_cpu_bench()==1 && kernel_calls==0 && fio_calls==0);
         no_handles_or_allocations();
     }
-    reset();fail_allocation=1;
-    CHECK(film_cpu_bench()==-1 && kernel_calls==0 && fio_calls==0);
-    CHECK(film_cpu_bench_get_results()->state==FILM_CPU_NO_MEMORY);
-    no_handles_or_allocations();
+    for(injection=1;injection<=2;++injection) {
+        reset();fail_allocation=(int)injection;
+        CHECK(film_cpu_bench()==-1 && kernel_calls==0 && fio_calls==0);
+        CHECK(film_cpu_bench_get_results()->state==FILM_CPU_NO_MEMORY);
+        no_handles_or_allocations();
+        reset();wrong_class=(int)injection;
+        CHECK(film_cpu_bench()==-1 && kernel_calls==0 && fio_calls==0);
+        CHECK(film_cpu_bench_get_results()->state==FILM_CPU_MEMORY_CLASS_ERROR);
+        CHECK(!film_cpu_bench_get_results()->memory_classes_checked);
+        no_handles_or_allocations();
+        reset();classified_span_fault=(int)injection;
+        CHECK(film_cpu_bench()==-1 && kernel_calls==0 && fio_calls==0);
+        CHECK(film_cpu_bench_get_results()->state==FILM_CPU_MEMORY_CLASS_ERROR);
+        CHECK(!film_cpu_bench_get_results()->memory_classes_checked);
+        no_handles_or_allocations();
+    }
+    /* Either candidate can produce a different byte; reject it before any
+     * file I/O instead of silently reporting a supposedly faster algorithm. */
+    for(call=1;call<=36;++call)if(call_variant(call-1u)) {
+        reset();mismatch_at=(int)call;
+        CHECK(film_cpu_bench()==-1 && fio_calls==0);
+        CHECK(film_cpu_bench_get_results()->state==FILM_CPU_OUTPUT_MISMATCH);
+        CHECK(!film_cpu_bench_get_results()->comparisons_complete);
+        no_handles_or_allocations();
+    }
 }
 
 static void test_guard_boundaries(void)
 {
     unsigned kind,boundary;
     for(kind=1;kind<=7;++kind)
-        for(boundary=1;boundary<=3;++boundary) {
+        for(boundary=1;boundary<=5;++boundary) {
             reset();guard_at=(int)boundary;guard_kind=(int)kind;
             if(kind==7) {expected_fio_after_calls=0;expected_deadline_csv=1;}
             CHECK(film_cpu_bench()==(kind==7 ? 0:1));
             CHECK(kernel_calls==0);
             if(kind==7) {CHECK(fio_calls>0);assert_csv(CSV_ONE);} else CHECK(fio_calls==0);
             CHECK(film_cpu_bench_get_results()->state==(kind<=2 ? FILM_CPU_CANCELLED : kind==7 ? FILM_CPU_DEADLINE : FILM_CPU_BUSY));
-            CHECK(allocations==(boundary==1 ? 0 : 1));
-            CHECK(touched_before_free==(boundary==3));
+            CHECK(allocations==(boundary==1 ? 0 : boundary==2 ? 1:2));
+            CHECK(touched_before_free==(boundary==5));
             assert_partial_progress(0);
             no_handles_or_allocations();
         }
@@ -565,7 +684,7 @@ static void test_deadline_precedence_and_report_stop(void)
     /* A contemporaneous Stop/shutdown/capture/mode change overrides deadline,
      * keeping the interrupted frame's raw sample in RAM but never doing I/O. */
     for(kind=1;kind<=6;++kind)
-        for(call=1;call<=12;++call) {
+        for(call=1;call<=36;++call) {
             reset();deadline_at=(int)call;
             switch(kind) {
             case 1:cancel_at=(int)call;break;case 2:shutdown_at=(int)call;break;
@@ -591,14 +710,14 @@ static void test_deadline_precedence_and_report_stop(void)
                 CHECK(renames==0 && removals==1);
                 CHECK(!film_cpu_bench_get_results()->report_path[0]);
                 preserved("ML/FILM/CPUB0002.TMP","UNRELATED");
-                assert_partial_progress(partial ? 2u:12u);no_handles_or_allocations();
+                assert_partial_progress(partial ? 2u:36u);no_handles_or_allocations();
             }
     /* File I/O is outside the cooperative CPU budget, while CPU elapsed and
      * per-frame durations remain the samples collected before any report I/O. */
     reset();report_clock_advance=20000u;
     CHECK(film_cpu_bench()==0 && clock_ms>10000u);
     CHECK(film_cpu_bench_get_results()->state==FILM_CPU_SAVED);
-    CHECK(film_cpu_bench_get_results()->elapsed_ms==90u);
+    CHECK(film_cpu_bench_get_results()->elapsed_ms==276u);
     assert_csv(CSV_ONE);no_handles_or_allocations();
 }
 
@@ -690,6 +809,7 @@ int main(void)
 {
     test_success_and_wrap();
     test_cancel_busy_and_kernel();
+    test_comparison_boundaries();
     test_guard_boundaries();
     test_deadline_precedence_and_report_stop();
     test_file_guards();

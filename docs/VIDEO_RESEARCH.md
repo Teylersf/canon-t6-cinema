@@ -12,9 +12,13 @@ or movie-recording reliability.
 
 The owner's camera now boots the overlay and has produced two independently
 decoded still JPEGs. The latest matches the desktop render's image codestream.
-The diagnostic r12 package is on the owner's card; physical synthetic CPU
-measurements and an unchanged stock 720p60 MOV are pending. Neither the physical
-photo result nor the emulator's benchmark durations establish video throughput.
+The diagnostic r12 package is on the owner's card. Its physical CPU report and
+two unchanged stock MOVs have now been transferred and verified. The 1080p29.97
+and 720p59.94 clips decode fully with audio and consistent frame timestamps.
+The size-optimized, uncached Strong/Blue kernel takes median 89, 388 and 510 ms
+on owned 320×180, 640×360 and 640×480 frames respectively. This path is too slow
+for real-time processing at those video rates. It is not a bound on cached or
+optimized implementations. See [physical results](HARDWARE_BASELINE.md).
 
 ## The existing display interface is not an encoder interface
 
@@ -124,8 +128,8 @@ isolated VM was closed normally. This identifies a movie-startup blocker in
 this emulator setup; it does not demonstrate a physical-camera power fault or
 a usable encoder boundary. The ROM reconstruction, unvalidated ROM0 and
 synthetic-completion limitations above still apply. The next useful evidence
-is an unchanged physical-camera baseline MOV recording and the pending CPU
-report; the physical boot and manual still-processing checks have since passed.
+was an unchanged physical-camera baseline MOV and CPU report; both have since
+been acquired, alongside physical boot and manual still-processing evidence.
 
 ## Isolated observation core for further physical research
 
@@ -159,8 +163,8 @@ validate this narrower observation contract only.
    and sustained-recording checks. Never infer safety from another model's ROM
    addresses or merely enable untested platform definitions.
 
-No such saved-video validation or experimental frame-rate ceiling has been
-measured for this build. This is a missing hardware/reverse-engineering result,
+No saved-video effect or experimental frame-rate ceiling has been measured for
+this build. This is a missing hardware/reverse-engineering result,
 not a proof that every possible implementation is impossible.
 
 ## Established, narrower in-camera option

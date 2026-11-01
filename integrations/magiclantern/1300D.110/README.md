@@ -48,21 +48,42 @@ from the embedded preview; use a color Picture Style for color stocks.
 - **CPU limits test:** a manual, offscreen YUV workload, serialized with still
   processing. It turns Auto off, clears queued Develop, and waits outside
   capture, half-shutter, LV and movie contexts. It runs generated 320×180,
-  640×360 and 640×480 frames with one warmup and three timed calls per case.
+  640×360 and 640×480 frames with one warmup and three timed calls for each of
+  three variants: the original size-optimized kernel on uncached memory, the
+  original on cached memory, and a separately compiled `-O2` copy on cached
+  memory. Both copies use the same source. The original object's flags stay
+  unchanged; only the renamed comparison object receives the trailing `-O2`.
   No camera image buffers, encoder hooks or sensor timers are accessed.
 
 Successful photo status includes elapsed seconds and milliseconds for the whole
 job, including stabilization, processing, cleanup and I/O. This is wall time,
 not an isolated CPU-cycle count.
 
-The CPU test uses one 615,680-byte allocation for pixels and row scratch, freed
-before report I/O. Its 10-second budget is cooperative between frames, not a
-hard execution limit. Cancel, capture or incompatible mode stops suppress the
-report. An idle deadline may save partial samples with explicit counts and -1
-for missing values. New reports use `ML/FILM/CPUB0001.CSV` through slot 0016,
+The comparison uses two separately owned 615,680-byte allocations for pixels
+and row scratch: `fio_malloc` for uncached access and `tmp_malloc` for cached
+access. It validates their returned memory classes and non-overlap, uses only
+the returned aliases, and frees both before report I/O. It performs no alias
+switching or explicit cache-maintenance operations. Allocator pool selection
+remains ML's policy; the API name does not identify a guaranteed backing pool.
+
+The two original-kernel runs alternate order by input seed; the optimized copy
+then reuses the cached allocation. Fills and full active-frame byte comparisons
+are outside every timing interval. A complete version-2 report has nine rows,
+27 timed samples and 24 output comparisons including warmups. Comparison counts
+are separate from timing counts: a partial report can retain a timing whose
+output comparison had not yet run.
+
+The 10-second budget is cooperative between operations, not a hard execution
+limit. Cancel, capture or incompatible mode stops suppress the report. An idle
+deadline may save partial samples with explicit counts and -1 for missing
+values. A memory-class or output mismatch stops without publishing a report.
+New reports use `ML/FILM/CPUB0001.CSV` through slot 0016,
 an exclusively created temporary, byte readback, and guarded rename; existing
 reports and other files are preserved. The CSV marks these as synthetic kernel
 timings. They establish no recording FPS, encoder format or DMA/cache ownership.
+The owner's earlier r12 version-1 uncached timings and short recording baselines
+are documented in `docs/HARDWARE_BASELINE.md`; physical comparison results for
+the newer version-2 diagnostic are still pending.
 
 Output beside `IMG_1234.CR2`: `T6F_1234.JPG`, via a new `T6F_1234.TMP`.
 The worker refuses detected existing output or temporary files. It requests
