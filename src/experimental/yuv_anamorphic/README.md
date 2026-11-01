@@ -8,8 +8,10 @@ streaks; it does not simulate optical anamorphic bokeh, change field of view,
 or desqueeze an image. Source license: GPL-2.0-only.
 
 **The actual T6 encoder format, stride, buffer ownership and available CPU time
-remain unknown.** This folder has no camera hook, native build connection or
-r11 integration. Host tests and ARM compilation establish no camera FPS.
+remain unknown.** There is no camera frame hook or r11 integration. The newer
+diagnostic build links this kernel only for an offscreen test on owned synthetic
+pixels. Host tests, ARM compilation and those kernel timings establish no
+recording FPS.
 
 ## Explicit input contracts
 

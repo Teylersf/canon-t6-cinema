@@ -23,6 +23,7 @@
 /* Intentionally not CONFIG_INT: processing always starts OFF after boot. */
 static int film_auto;
 static volatile int film_request;
+static volatile int film_bench_request;
 static volatile int film_cancel;
 static volatile int film_processing;
 extern int ml_started;
@@ -36,7 +37,7 @@ static char film_names[FILM_T6_MAX_STOCKS][32];
 static char film_files[FILM_T6_MAX_STOCKS][32];
 static const char *film_choices[FILM_T6_MAX_STOCKS];
 static int film_count;
-static char film_status[48] = "Starting; hardware untested";
+static char film_status[48] = "Starting; experimental";
 static struct menu_entry film_menu[];
 
 /* Canon's formatter is not ISO printf: string precision is unsupported.
@@ -56,6 +57,15 @@ void film_t6_clear_cancel(void) { film_cancel = 0; }
 int film_t6_take_request(void)
 {
     if (!film_request) return 0;
+    film_request = 0;
+    return 1;
+}
+int film_t6_bench_pending(void) { return film_bench_request != 0; }
+int film_t6_take_bench_request(void)
+{
+    if (!film_bench_request) return 0;
+    film_bench_request = 0;
+    film_auto = 0;
     film_request = 0;
     return 1;
 }
@@ -134,8 +144,10 @@ int film_retro_event_gate(struct event *event)
     if (actions & FILM_RETRO_CHANGED) {
         film_stock = p.stock; film_effect = p.effect; film_amber = p.amber; film_auto = p.auto_on;
     }
-    if (actions & FILM_RETRO_DEVELOP) { film_cancel = 0; film_request = 1; }
-    if (actions & FILM_RETRO_CANCEL) { film_auto = 0; film_request = 0; film_cancel = 1; }
+    if ((actions & FILM_RETRO_DEVELOP) && !film_processing) { film_cancel = 0; film_request = 1; }
+    if (actions & FILM_RETRO_CANCEL) {
+        film_auto = 0; film_request = 0; film_bench_request = 0; film_cancel = 1;
+    }
     /* Native handle_ml_menu_keys owns the half-press close signal. Canon can
      * update the half-press state and send other notifications before that
      * queued button event. Do not add a second close during this interval:
@@ -290,12 +302,13 @@ done:
     if (!film_count) film_choices[0] = "No ML/FILM stocks";
     if (film_stock < 0 || film_stock >= film_count) film_stock = 0;
     film_menu[2].max = film_count > 0 ? film_count - 1 : 0;
-    film_t6_set_status(film_count ? "Ready; hardware untested" : "Missing ML/FILM stocks");
+    film_t6_set_status(film_count ? "Ready; experimental" : "Missing ML/FILM stocks");
 }
 
 static MENU_SELECT_FUNC(film_develop_latest)
 {
     (void)priv; (void)delta;
+    if (film_processing) return; /* Do not undo cancellation of an active job. */
     film_cancel = 0;
     film_request = 1; /* Coalesces repeated button presses; no unbounded queue. */
 }
@@ -305,7 +318,19 @@ static MENU_SELECT_FUNC(film_stop)
     (void)priv; (void)delta;
     film_auto = 0;
     film_request = 0;
+    film_bench_request = 0;
     film_cancel = 1;
+}
+
+static MENU_SELECT_FUNC(film_cpu_limits)
+{
+    (void)priv; (void)delta;
+    if (film_processing) return;
+    film_auto = 0;
+    film_request = 0;
+    film_cancel = 0;
+    film_bench_request = 1; /* One pending run; repeated presses coalesce. */
+    film_t6_set_status("CPU test queued; Auto OFF");
 }
 
 static MENU_UPDATE_FUNC(film_status_update)
@@ -354,6 +379,11 @@ static struct menu_entry film_menu[] = {
         .update = film_retro_draw_menu,
         .help = "Amber film console. D-pad/SET/Q/DISP; MENU closes.",
         .help2 = "Shutter, AV/erase, playback, LV and zoom retain native controls.",
+    },
+    {
+        .name = "CPU limits test", .select = film_cpu_limits,
+        .help = "Bounded offscreen test; Auto OFF. Waits for idle, outside LV/movie.",
+        .help2 = "Cancel / stop auto stops the test. No clocks or sensor changes.",
     },
 };
 

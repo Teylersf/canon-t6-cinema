@@ -36,6 +36,10 @@ jobs:
         run: make -C src -f Makefile.t6 arm
       - name: Experimental packed-YUV contracts and ARM build
         run: make -C src/experimental/yuv_anamorphic test asan arm
+      - name: Native synthetic CPU benchmark regressions
+        run: make -C src/tools/t6_cpu_bench_test test asan
+      - name: Static firmware RAM bound
+        run: python3 src/tools/t6_worker_test/build_ram_test.py
       - name: Offline installer enumeration regressions
         run: |
           git init /tmp/t6-mlinstall

@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tarfile
@@ -34,6 +35,9 @@ STOCK_PACKAGE_NAMES = {
     "classicneg.fs": "classneg.fs",
     "nostalgicneg.fs": "nostneg.fs",
 }
+YUV_INPUTS = ["yuv_anamorphic.c", "yuv_anamorphic.h"]
+ML_RAM_START = 0xC80000
+ML_RAM_END = 0xD00000
 
 
 def fail(message):
@@ -50,6 +54,40 @@ def sha256(path):
         for block in iter(lambda: file.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def validate_ram_image(path):
+    """Keep the complete ARM load segment, including BSS, in the T6 reserve.
+
+    This is a static-image bound, not a measurement of heap or task-stack use.
+    The exact pinned platform reserves [0xC80000, 0xD00000) for ML.
+    """
+    data = path.read_bytes()
+    if len(data) < 52 or data[:7] != b"\x7fELF\x01\x01\x01":
+        fail("expected a little-endian ELF32 ARM image")
+    header = struct.unpack_from("<16sHHIIIIIHHHHHH", data)
+    _, kind, machine, version, entry, phoff, _, _, ehsize, phsize, phnum, *_ = header
+    if (kind, machine, version, entry, ehsize, phsize) != (2, 40, 1, ML_RAM_START, 52, 32):
+        fail("unexpected T6 ARM ELF header or entry point")
+    if not 1 <= phnum <= 16 or phoff < 52 or phoff + phnum * phsize > len(data):
+        fail("invalid T6 ELF program-header table")
+    loads = []
+    for number in range(phnum):
+        segment = struct.unpack_from("<8I", data, phoff + number * phsize)
+        ptype, offset, address, physical, files, memory, _, _ = segment
+        if ptype != 1:
+            continue
+        if (not memory or files > memory or offset + files > len(data) or
+                address != physical or address < ML_RAM_START or address + memory > ML_RAM_END):
+            fail("T6 static load/BSS exceeds the reserved RAM range")
+        loads.append((address, address + memory))
+    if len(loads) != 1 or loads[0][0] != ML_RAM_START:
+        fail("unexpected T6 ELF load-segment layout")
+    end = loads[0][1]
+    return {"start": ML_RAM_START, "end_exclusive": ML_RAM_END,
+            "static_load_bytes": end - ML_RAM_START,
+            "remaining_reserved_bytes": ML_RAM_END - end,
+            "includes_bss": True, "excludes_heap_and_task_stacks": True}
 
 
 def sanitize_build_identity(stage):
@@ -214,6 +252,9 @@ def check_source(source):
             fail("missing engine source: " + name)
     if not (OVERLAY / "src" / "film_develop.c").is_file():
         fail("missing 1300D overlay")
+    for name in YUV_INPUTS:
+        if not (ROOT / "src" / "experimental" / "yuv_anamorphic" / name).is_file():
+            fail("missing bounded YUV benchmark input: " + name)
     for name in FONT_FILES:
         if not (source / "data" / "fonts" / name).is_file():
             fail("missing pinned ML bitmap font: " + name)
@@ -247,6 +288,15 @@ def extract_source(source, stage):
         for path in (stage / name).rglob("*"):
             if path.is_file():
                 hashes[original + "/" + path.relative_to(stage / name).as_posix()] = sha256(path)
+    # The YUV backend is linked only for the owned synthetic CPU benchmark.
+    # Add it after the engine hash pass so its true source paths are recorded.
+    for name in YUV_INPUTS:
+        original = ROOT / "src" / "experimental" / "yuv_anamorphic" / name
+        destination = stage / "soup_engine" / name
+        if destination.exists():
+            fail("unexpected duplicate YUV engine input: " + name)
+        shutil.copy2(original, destination)
+        hashes[original.relative_to(ROOT).as_posix()] = sha256(destination)
     for name in FONT_FILES:
         hashes["data/fonts/" + name] = sha256(stage / "data" / "fonts" / name)
     shutil.copy2(Path(__file__), metadata / "build-t6.py")
@@ -302,6 +352,7 @@ def package_stocks(source, destination):
 
 def package(stage, destination, log, toolchain):
     platform = stage / "platform" / PLATFORM / "build"
+    ram_image = validate_ram_image(platform / "magiclantern")
     destination.mkdir(parents=True, exist_ok=False)
     shutil.copy2(platform / "autoexec.bin", destination / "AUTOEXEC.BIN")
     modules = destination / "ML" / "modules"
@@ -324,7 +375,7 @@ def package(stage, destination, log, toolchain):
     manifest = {
         "camera": "Canon EOS Rebel T6 / EOS 1300D / Kiss X80",
         "canon_firmware": "1.1.0", "platform": PLATFORM,
-        "status": "EXPERIMENTAL - HARDWARE UNTESTED - NO INSTALLER",
+        "status": "EXPERIMENTAL - LIMITED PHYSICAL STILL VALIDATION - NO INSTALLER",
         "magic_lantern_commit": ML_PIN,
         "soup_engine_base_commit": SOUP_BASE,
         "built_utc": datetime.now(timezone.utc).isoformat(),
@@ -334,6 +385,7 @@ def package(stage, destination, log, toolchain):
         "stage": str(stage),
         "source_hashes": json.loads((stage / "t6_inputs" / "source-hashes.json").read_text()),
         "artifact_hashes": {},
+        "static_ram_image": ram_image,
         "stock_file_map": stock_file_map,
         "limits": {"batch": 4, "preview_bytes": 12 * 1024 * 1024,
                    "output_bytes": 8 * 1024 * 1024, "deadline_seconds": 300},
@@ -342,6 +394,7 @@ def package(stage, destination, log, toolchain):
         "native_fio_validation": "exclusive-create and rename collision semantics hardware unverified",
         "retro_ui": "native custom-menu renderer; checked pinned source gates; hardware untested",
         "retro_ui_source_patches": ["src/gui-common.c", "src/menu.c"],
+        "video_cpu_benchmark": "owned synthetic packed-YUV workload only; no encoder hook or recording-FPS result",
     }
     for path in sorted(destination.rglob("*")):
         if path.is_file():

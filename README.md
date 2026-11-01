@@ -23,10 +23,14 @@ not a complete Magic Lantern installer or a production-ready firmware release.
   bokeh, depth of field, or an anamorphic lens's extra horizontal view.
 - A manual **Develop latest** command and bounded automatic processing.
   Automatic processing always starts OFF after boot.
+- Photo status reports elapsed wall time, including I/O. A manual **CPU limits
+  test** records a bounded synthetic YUV workload to a new CSV; these kernel
+  timings do not measure saved-video FPS. See the [camera notes](integrations/magiclantern/1300D.110/README.md).
 - Separate `T6F_####.JPG` outputs. Source CR2s and their embedded previews are
   opened read-only, never rewritten or deleted. Detected existing outputs are
   refused. The T6-specific creation mode and rename collisions were tested with
-  the actual firmware in emulation; physical storage still needs validation.
+  the actual firmware in emulation. Physical new-file creation works; collision
+  preservation still needs physical validation.
 - Half-resolution embedded-JPEG processing: the tested real T6 sample produces
   **2592 × 1728** JPEGs. This is not full sensor-RAW development.
 - A desktop reference using the same C renderer, plus optional center crop and
@@ -57,8 +61,9 @@ The T6's upstream movie structures and several buffer addresses are explicitly
 unverified. An LCD preview filter is not proof of an effect in the saved MOV.
 See [video research](docs/VIDEO_RESEARCH.md) and [high-fps research](docs/HIGH_FPS.md).
 An isolated [packed-YUV processing prototype](src/experimental/yuv_anamorphic/README.md)
-uses integer highlight streaks and row scratch. It is not linked into the camera
-build and does not establish the T6 encoder's format, buffer ownership or FPS.
+uses integer highlight streaks and row scratch. The diagnostic build links it
+only for owned synthetic benchmark frames. There is no encoder-frame hook, and
+the T6 recording format, buffer ownership and effect throughput remain unverified.
 
 The [read-only Windows camera-info tool](tools/read-only-camera-info/README.md)
 confirmed the connected T6's firmware as **1.1.0** using standard PTP DeviceInfo.
@@ -102,6 +107,8 @@ The script builds an isolated temporary source tree, preserving the upstream
 checkout. It generates `AUTOEXEC.BIN`, its matching `ML/modules/t6_110.sym`, bitmap
 fonts, film recipes, manifest and checksums. It never installs software, writes to a memory
 card, enables a boot flag or flashes a camera. No Canon ROMs are included.
+It also rejects a static ELF load/BSS footprint outside the pinned platform's
+512 KiB reserve; this does not account for heap allocations or task stacks.
 
 This is an **overlay for a matching, already-working 1300D.110 environment**,
 not a complete bootable card. Do not use binaries for the 5D, 50D, T6i/750D,

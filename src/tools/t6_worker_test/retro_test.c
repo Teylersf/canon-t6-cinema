@@ -39,7 +39,7 @@ int bmp_printf(uint32_t font,int x,int y,const char *fmt,...){char b[128];va_lis
 static void reset(void){
  memset(&retro,0,sizeof retro);retro_handoff_event=NULL;retro_av_handoff=0;
  menu_on=tab_on=entry_on=mock_display_on=1;movie=half=lv=ml_shutdown_requested=0;
- lens_info.job_state=0;film_auto=film_request=film_cancel=film_processing=0;
+ lens_info.job_state=0;film_auto=film_request=film_bench_request=film_cancel=film_processing=0;
  film_count=3;film_stock=0;film_effect=0;film_amber=0;
  snprintf(film_names[0],32,"PORTRA");snprintf(film_names[1],32,"SOUP 800");
  stops=draws=acks=av_reads=end_poll=0;
@@ -83,6 +83,25 @@ int main(void){
  const int releases[]={BGMT_UNPRESS_UP,BGMT_UNPRESS_DOWN,BGMT_UNPRESS_LEFT,BGMT_UNPRESS_RIGHT,BGMT_UNPRESS_SET,BGMT_UNPRESS_DISP};
  const int native[]={BGMT_PLAY,BGMT_LV,BGMT_ISO,BGMT_PRESS_ZOOM_IN,BGMT_UNPRESS_ZOOM_IN,BGMT_PRESS_ZOOM_OUT,BGMT_UNPRESS_ZOOM_OUT,BGMT_PRESS_HALFSHUTTER,BGMT_UNPRESS_HALFSHUTTER,BGMT_PRESS_FULLSHUTTER,BGMT_UNPRESS_FULLSHUTTER};
  pure_state_tests();reset();CHECK(film_retro_event_gate(NULL)==1);
+ CHECK(COUNT(film_menu)==9&&!strcmp(film_menu[7].name,"Retro dashboard")&&
+       !strcmp(film_menu[8].name,"CPU limits test"));
+ /* CPU action coalesces one request, disables Auto and drops Develop.
+  * Busy presses cannot clear an active cancellation or queue another run. */
+ film_auto=film_request=film_cancel=1;film_cpu_limits(NULL,1);
+ CHECK(film_bench_request&&!film_auto&&!film_request&&!film_cancel&&
+       !strcmp(film_status,"CPU test queued; Auto OFF"));
+ film_cpu_limits(NULL,1);CHECK(film_bench_request==1);
+ film_auto=film_request=1;
+ CHECK(film_t6_bench_pending()&&film_t6_take_bench_request()==1&&
+       !film_t6_bench_pending()&&!film_auto&&!film_request);
+ CHECK(!film_t6_take_bench_request());
+ film_processing=film_auto=film_request=film_cancel=1;film_cpu_limits(NULL,1);
+ CHECK(!film_bench_request&&film_processing&&film_auto&&film_request&&film_cancel);
+ film_request=0;film_develop_latest(NULL,1);
+ CHECK(film_processing&&film_cancel&&!film_request);
+ film_processing=0;film_bench_request=1;film_stop(NULL,1);
+ CHECK(!film_bench_request&&!film_auto&&!film_request&&film_cancel);
+ reset();
  CHECK(!t6_native_format_allowed("%.34s")&&!t6_native_format_allowed("%.31s"));
  CHECK(!t6_native_format_allowed("%.*s")&&t6_native_format_allowed("%s/%s%04d.CR2"));
  /* Exact filenames and clipped visible text must survive the camera subset. */
@@ -100,7 +119,8 @@ int main(void){
  CHECK(key(BGMT_Q)==0&&retro.page==1);CHECK(key(BGMT_PRESS_DOWN)==0);
  CHECK(key(BGMT_PRESS_SET)==0&&film_request==1);film_request=0;film_processing=1;
  CHECK(key(BGMT_PRESS_SET)==0&&!film_request);CHECK(key(BGMT_PRESS_DOWN)==0);
- film_auto=1;CHECK(key(BGMT_PRESS_SET)==0&&film_cancel&&!film_auto);
+ film_auto=film_bench_request=1;
+ CHECK(key(BGMT_PRESS_SET)==0&&film_cancel&&!film_auto&&!film_bench_request);
  for(i=0;i<6;i++){
   reset();open_ui();CHECK(key(presses[i])==0);CHECK(key(BGMT_MENU)==0&&!retro.visible);
   CHECK(key(releases[i])==0);CHECK(key(releases[i])==1);

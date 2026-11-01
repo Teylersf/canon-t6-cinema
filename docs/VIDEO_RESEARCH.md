@@ -104,8 +104,9 @@ provides bounded integer horizontal highlight streaks without a JPEG stage or
 RGB conversion. It accepts explicit generic packed layouts, ranges and chroma
 representations; none is asserted to match this T6 encoder. Host/ARM tests do
 not establish physical processing time. It is excluded from the current camera
-build and requires verified exclusive buffer ownership and cache handling
-before integration.
+recording pipeline. The diagnostic build can benchmark it on owned synthetic
+pixels; using it on recorded frames still requires verified exclusive buffer
+ownership and cache handling.
 
 A separate stock-Canon emulator run armed these observation points without
 changing firmware or target registers. The emulator's documented `V` control

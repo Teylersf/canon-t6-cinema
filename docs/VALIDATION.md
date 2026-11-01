@@ -56,8 +56,17 @@ T6 with firmware 1.1.0; its private ROM1 dump matches the camera checksum.
   read back as planned, with five original sectors backed up privately. All 27
   package/checksum files still matched their hashes afterward.
 - The isolated packed-YUV backend passes strict host, sanitizer and ARM946E-S
-  compilation checks. It has no camera hook or native build integration; its
+  compilation checks. It has no encoder-frame hook; its
   explicit ownership flag does not verify producer/encoder/DMA/cache safety.
+- The newer diagnostic build links that backend only for a serialized offscreen
+  CPU test. Native emulation saved and independently read back a CSV with three
+  cases and three valid timed frames per case; cancellation, deadline-partial
+  reports, collisions and readback-allocation failures pass host sanitizers.
+  Native photo elapsed formatting and shutter closure also passed. Emulator
+  durations are not physical CPU or recording-speed measurements.
+- The build checks the complete static ARM ELF load, including BSS, against
+  `[0xC80000,0xD00000)`. The diagnostic image uses 462,848 bytes and leaves
+  61,440 bytes in that reserve. Heap allocations and task stacks are separate.
 
 The initial reference produces 2592×1728 output from a real 1300D embedded JPEG.
 No desktop timing is presented as a T6 processing-speed measurement.

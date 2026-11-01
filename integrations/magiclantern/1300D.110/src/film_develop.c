@@ -10,6 +10,7 @@
 #include "propvalues.h"
 #include "notify_box.h"
 #include "film_t6.h"
+#include "film_cpu_bench.h"
 #include "se.h"
 #include "cr2.h"
 #include "stock.h"
@@ -163,6 +164,17 @@ static int film_verify_output(const char *path, uint32_t expected)
     return ok ? 0 : -1;
 }
 
+static void film_saved_status(uint32_t started)
+{
+    char message[35];
+    uint32_t elapsed_ms = (uint32_t)get_ms_clock() - started;
+    /* Native formatting supports integer widths, not floating point.
+     * Even UINT32_MAX milliseconds fits the 34-character value limit. */
+    snprintf(message, sizeof(message), "JPEG saved %d.%03ds; CR2 safe",
+             (int)(elapsed_ms / 1000u), (int)(elapsed_ms % 1000u));
+    film_t6_set_status(message);
+}
+
 /* No historical directory walk: callers supply one bounded, current path. */
 static int film_develop(const char *source, const char *destination, const char *temporary,
                         const struct film_t6_settings *settings, int automatic)
@@ -235,8 +247,8 @@ static int film_develop(const char *source, const char *destination, const char 
      * Ask this T6 firmware for exclusive creation, including its required
      * existing-name lookup, and abort if it rejects the native flags;
      * there is deliberately no create/truncate/remove-and-retry fallback.
-     * New-file and late-collision paths were tested using actual firmware in
-     * the emulator; physical 1300D.110 validation is still outstanding. */
+     * New-file creation also completed on the physical T6. Late-collision
+     * preservation is emulator-tested and still needs physical validation. */
     job.output = FIO_OpenFile(temporary, FILM_T6_CREATE_NEW);
     if (!job.output) goto done;
     created = 1;
@@ -278,8 +290,12 @@ done:
     if (look) free(look);
     if (metadata) free(metadata);
     film_t6_set_processing(0);
-    film_t6_set_status(rc == 0 ? "JPEG saved; CR2 untouched" :
-        film_t6_cancelled() ? "Cancelled; CR2 untouched" : "Failed; CR2 untouched");
+    if (rc == 0) {
+        film_saved_status(job.started);
+    } else {
+        film_t6_set_status(film_t6_cancelled() ?
+            "Cancelled; CR2 untouched" : "Failed; CR2 untouched");
+    }
     return rc;
 }
 
@@ -313,6 +329,18 @@ static void film_worker(void *unused)
         int manual;
         int current = card ? card->file_number : 0;
         if (film_camera_busy()) { msleep(500); continue; }
+        if (film_t6_bench_pending()) {
+            if (!lv && film_t6_take_bench_request()) {
+                /* The queue action cleared stale cancellation. Never clear it
+                 * here: Stop may arrive after claim but before this call. */
+                film_t6_set_processing(1);
+                film_cpu_bench();
+                film_t6_set_processing(0);
+                previous_auto = 0; /* A later Auto enable starts a new baseline. */
+            }
+            msleep(500);
+            continue;
+        }
         manual = film_t6_take_request();
         if (!card || current < 1 || current > 9999) { msleep(500); continue; }
         snprintf(directory, sizeof(directory), "%s", get_dcim_dir());

@@ -26,8 +26,14 @@ static int inject_source_growth, inject_rename_failure, inject_tmp_race;
 static int short_reads, read_calls, inject_read_failure, inject_deadline, inject_shutdown;
 static int inject_open_race, reject_exclusive, exclusive_opens, legacy_creates;
 static int inject_destination_race;
+static int half_pressed, movie_mode, manual_request, bench_request, processing;
+static int bench_calls, bench_return, bench_cancel, worker_stop_on_sleep;
+static int processing_entries, processing_exits, no_card;
+static int bench_cancel_after_claim;
+static unsigned write_delay_ms;
 static char status[80];
 int ml_started = 1, ml_shutdown_requested;
+int lv, shooting_mode;
 struct mock_lens_info lens_info;
 
 static entry *find(const char *path)
@@ -74,6 +80,11 @@ static void reset(void)
     read_calls = inject_read_failure = inject_deadline = inject_shutdown = 0;
     inject_open_race = reject_exclusive = exclusive_opens = legacy_creates = 0;
     inject_destination_race = 0;
+    half_pressed = movie_mode = manual_request = bench_request = processing = 0;
+    bench_calls = bench_return = bench_cancel = worker_stop_on_sleep = 0;
+    processing_entries = processing_exits = no_card = lv = 0;
+    bench_cancel_after_claim = 0;
+    write_delay_ms = 0;
     ml_shutdown_requested = 0; status[0] = 0;
 }
 unsigned get_ms_clock(void) { return clock_ms; }
@@ -82,12 +93,13 @@ void msleep(int ms)
     clock_ms += (unsigned)ms;
     if (inject_tmp_race && clock_ms >= 600 && !find(TEMP))
         make_entry(TEMP, "KEEP", 4, 1);
+    if (worker_stop_on_sleep && ms == 500) ml_shutdown_requested = 1;
 }
 void *fio_malloc(size_t size) { return malloc(size); }
 void fio_free(void *ptr) { free(ptr); }
-int get_halfshutter_pressed(void) { return 0; }
-int is_movie_mode(void) { return 0; }
-struct card_info *get_shooting_card(void) { static struct card_info c = {1}; return &c; }
+int get_halfshutter_pressed(void) { return half_pressed; }
+int is_movie_mode(void) { return movie_mode; }
+struct card_info *get_shooting_card(void) { static struct card_info c = {1}; return no_card ? NULL : &c; }
 const char *get_dcim_dir(void) { return "A:/DCIM/100CANON"; }
 const char *get_file_prefix(void) { return "IMG_"; }
 int is_file(const char *path) { return find(path) != NULL; }
@@ -132,6 +144,7 @@ int FIO_WriteFile(FILE *file, const void *src, size_t count)
 {
     handle *h = (handle *)file;
     size_t n = inject_write_failure && writes ? count / 2 : count;
+    clock_ms += write_delay_ms;
     CHECK(h->open && h->writing && !strcmp(h->file->path, TEMP));
     if (h->offset + n > h->file->cap) {
         h->file->cap = h->offset + n + 4096;
@@ -194,13 +207,41 @@ size_t read_file(const char *path, void *dst, size_t size)
     memcpy(dst, e->data, size); return size;
 }
 int film_t6_auto_enabled(void) { return auto_on; }
-int film_t6_take_request(void) { return 0; }
+int film_t6_take_request(void) { int result = manual_request; manual_request = 0; return result; }
+int film_t6_bench_pending(void) { return bench_request; }
+int film_t6_take_bench_request(void)
+{
+    if (!bench_request) return 0;
+    bench_request = auto_on = manual_request = 0;
+    if (bench_cancel_after_claim) cancel_now = 1;
+    return 1;
+}
 int film_t6_cancelled(void) { return cancel_now || ml_shutdown_requested; }
 void film_t6_clear_cancel(void) { cancel_now = 0; }
 void film_t6_snapshot(struct film_t6_settings *s) { snprintf(s->stock, sizeof(s->stock), "portra.fs"); s->effect = 2; s->amber = 0; }
 void film_t6_load_stocks(void) {}
 void film_t6_set_status(const char *s) { snprintf(status, sizeof(status), "%s", s); }
-void film_t6_set_processing(int processing) { (void)processing; }
+void film_t6_set_processing(int active)
+{
+    processing = active != 0;
+    if (processing) processing_entries++; else processing_exits++;
+}
+int film_cpu_bench(void)
+{
+    CHECK(processing && !auto_on && !manual_request && !bench_request);
+    CHECK(!ml_shutdown_requested && !lens_info.job_state &&
+          !half_pressed && !movie_mode && !lv);
+    CHECK(!writes && !creates && !source_ops);
+    bench_calls++;
+    if (cancel_now) {
+        CHECK(bench_cancel_after_claim);
+        snprintf(status, sizeof(status), "%s", "CPU test stopped");
+        return 1;
+    }
+    if (bench_cancel) cancel_now = 1;
+    snprintf(status, sizeof(status), "%s", bench_return ? "CPU test stopped" : "CPU test saved");
+    return bench_return;
+}
 
 #define snprintf t6_mock_snprintf
 #include "../../../integrations/magiclantern/1300D.110/src/film_develop.c"
@@ -236,6 +277,50 @@ int main(int argc, char **argv)
     se_jdec_info info;
     CHECK(argc == 3); fixture = load(argv[1], &fixture_len); recipe = load(argv[2], &recipe_len);
     reset();
+    /* Actual native formatter subset and unsigned-wrap elapsed measurement. */
+    clock_ms = 0; film_saved_status(0);
+    CHECK(!strcmp(status, "JPEG saved 0.000s; CR2 safe"));
+    clock_ms = 1234; film_saved_status(0);
+    CHECK(!strcmp(status, "JPEG saved 1.234s; CR2 safe"));
+    clock_ms = 3; film_saved_status(UINT32_MAX - 6u);
+    CHECK(!strcmp(status, "JPEG saved 0.010s; CR2 safe"));
+    clock_ms = 0; film_saved_status(1);
+    CHECK(!strcmp(status, "JPEG saved 4294967.295s; CR2 safe") && strlen(status) <= 34);
+    /* Worker claims benchmark ahead of queued photos; it does not need a
+     * valid current photo/card, and resets processing for every result. */
+    { int result;
+      for (result = -1; result <= 1; result++) {
+          reset(); auto_on = 1; manual_request = bench_request = 1;
+          bench_return = result; bench_cancel = result == 1;
+          worker_stop_on_sleep = 1; no_card = 1;
+          film_worker(NULL);
+          CHECK(bench_calls == 1 && !bench_request && !manual_request && !auto_on &&
+                !processing && processing_entries == 1 && processing_exits == 1 &&
+                !writes && !creates && !source_ops && !renames);
+          CHECK(cancel_now == (result == 1));
+          CHECK(!strcmp(status, result ? "CPU test stopped" : "CPU test saved"));
+      }
+    }
+    reset(); bench_request = 1; bench_cancel_after_claim = worker_stop_on_sleep = 1;
+    film_worker(NULL);
+    CHECK(bench_calls == 1 && cancel_now && !processing &&
+          !strcmp(status, "CPU test stopped") && !writes && !creates);
+    /* A queued benchmark waits through each excluded context and is not
+     * consumed by the wait. Shutdown exits without starting it. */
+    { int context;
+      for (context = 0; context < 5; context++) {
+          reset(); auto_on = 0; bench_request = 1; worker_stop_on_sleep = 1;
+          if (context == 0) lens_info.job_state = 1;
+          if (context == 1) half_pressed = 1;
+          if (context == 2) movie_mode = 1;
+          if (context == 3) lv = 1;
+          if (context == 4) ml_shutdown_requested = 1;
+          film_worker(NULL);
+          CHECK(bench_request == 1 && !bench_calls && !processing_entries &&
+                !processing && !writes && !creates && !source_ops);
+      }
+    }
+    reset();
     CHECK((O_WRONLY | O_CREAT | O_EXCL) == 0xc1u); /* upstream macros unchanged */
     CHECK(!FIO_OpenFile(TEMP, 0xc1u) && !find(TEMP) && !creates);
     CHECK(!FIO_OpenFile(TEMP, 0x501u) && !find(TEMP) && !creates);
@@ -244,13 +329,19 @@ int main(int argc, char **argv)
     e = find(DEST); CHECK(e && !find(TEMP) && creates == 1 && renames == 1 && !removes);
     CHECK(se_jpeg_dec_info(e->data, e->len, &info) == SE_OK);
     CHECK(info.width == 2592 && info.height == 1728);
-    CHECK(!strcmp(status, "JPEG saved; CR2 untouched"));
+    CHECK(!strcmp(status, "JPEG saved 0.708s; CR2 safe"));
     { const char *path = getenv("T6_WORKER_OUTPUT");
       if (path && path[0]) {
           FILE *f = fopen(path, "wb"); CHECK(f);
           CHECK(fwrite(e->data, 1, e->len, f) == e->len); CHECK(!fclose(f));
       } }
     CHECK(develop(0) == 1 && creates == 1 && renames == 1); /* repeated manual */
+    reset(); write_delay_ms = 7;
+    CHECK(develop(0) == 0 && clock_ms > 708u);
+    { char expected[35];
+      snprintf(expected, sizeof(expected), "JPEG saved %d.%03ds; CR2 safe",
+               (int)(clock_ms / 1000u), (int)(clock_ms % 1000u));
+      CHECK(!strcmp(status, expected)); }
     reset(); make_entry(DEST, "KEEP", 4, 1);
     CHECK(develop(0) == 1 && !memcmp(find(DEST)->data, "KEEP", 4) && !creates);
     reset(); make_entry(TEMP, "KEEP", 4, 1);

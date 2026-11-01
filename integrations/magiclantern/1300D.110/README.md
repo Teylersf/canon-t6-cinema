@@ -1,7 +1,9 @@
 # T6 Cinema — experimental 1300D.110 integration
 
-**HARDWARE UNTESTED.** Compiling this source is not evidence that it boots or
-operates reliably on a physical camera. Target: Canon EOS Rebel T6 / EOS 1300D /
+**EXPERIMENTAL, LIMITED PHYSICAL VALIDATION.** The r11 build booted and produced
+two readable JPEGs on the owner's T6; the latest ETERNA/STRONG/BLUE image matched
+the desktop codestream exactly. This does not establish sustained reliability.
+Target: Canon EOS Rebel T6 / EOS 1300D /
 Kiss X80 with Canon firmware **1.1.0 only**. T6i/750D, T5/1200D and firmware
 1.2.0 are different targets. No installer or boot-flag writer is supplied.
 
@@ -43,6 +45,24 @@ from the embedded preview; use a color Picture Style for color stocks.
 - **Cinema effects:** OFF, Subtle, Cinema, Strong. **Streak tint:** Blue or Amber.
 - **Cancel / stop auto:** disables automatic processing and cancels at a row or
   I/O boundary. Shutting down also requests cancellation.
+- **CPU limits test:** a manual, offscreen YUV workload, serialized with still
+  processing. It turns Auto off, clears queued Develop, and waits outside
+  capture, half-shutter, LV and movie contexts. It runs generated 320×180,
+  640×360 and 640×480 frames with one warmup and three timed calls per case.
+  No camera image buffers, encoder hooks or sensor timers are accessed.
+
+Successful photo status includes elapsed seconds and milliseconds for the whole
+job, including stabilization, processing, cleanup and I/O. This is wall time,
+not an isolated CPU-cycle count.
+
+The CPU test uses one 615,680-byte allocation for pixels and row scratch, freed
+before report I/O. Its 10-second budget is cooperative between frames, not a
+hard execution limit. Cancel, capture or incompatible mode stops suppress the
+report. An idle deadline may save partial samples with explicit counts and -1
+for missing values. New reports use `ML/FILM/CPUB0001.CSV` through slot 0016,
+an exclusively created temporary, byte readback, and guarded rename; existing
+reports and other files are preserved. The CSV marks these as synthetic kernel
+timings. They establish no recording FPS, encoder format or DMA/cache ownership.
 
 Output beside `IMG_1234.CR2`: `T6F_1234.JPG`, via a new `T6F_1234.TMP`.
 The worker refuses detected existing output or temporary files. It requests

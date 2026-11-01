@@ -13,6 +13,8 @@ struct film_t6_settings {
 
 int film_t6_auto_enabled(void);
 int film_t6_take_request(void);
+int film_t6_bench_pending(void);
+int film_t6_take_bench_request(void);
 int film_t6_cancelled(void);
 void film_t6_clear_cancel(void);
 void film_t6_snapshot(struct film_t6_settings *settings);
